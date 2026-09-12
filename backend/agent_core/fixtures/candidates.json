@@ -1,0 +1,41 @@
+[
+  {
+    "listing_id": "58-demo-001",
+    "title": "近中心广场！厨卧分离 实图实价 押一付一",
+    "price": 750,
+    "room": "1室1厅",
+    "area_sqm": 55.0,
+    "community": "大学城附近小区",
+    "platform": "58同城",
+    "city": "cz",
+    "region": "wujin",
+    "detail_url": "https://example.zf.58.com/wujin/demo-58-001.html",
+    "data_quality": "current_public_list_page_candidate"
+  },
+  {
+    "listing_id": "anjuke-demo-001",
+    "title": "示例花园西区精装一室",
+    "price": 1000,
+    "room": "1室1厅",
+    "area_sqm": 50.0,
+    "community": "示例花园(西区)",
+    "platform": "安居客",
+    "city": "cz",
+    "region": "wujin",
+    "detail_url": "https://example.zu.anjuke.com/fangyuan/demo-anjuke-001",
+    "data_quality": "current_public_list_page_candidate"
+  },
+  {
+    "listing_id": "fang-demo-001",
+    "title": "清水湾花园一期 2室2厅 精装修",
+    "price": 1700,
+    "room": "2室2厅",
+    "area_sqm": null,
+    "community": "清水湾花园一期",
+    "platform": "房天下",
+    "city": "cz",
+    "region": "wujin",
+    "detail_url": "https://example.zu.fang.com/house/wujin/demo-001",
+    "data_quality": "current_public_list_page_candidate"
+  }
+]

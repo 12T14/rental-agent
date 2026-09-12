@@ -1,0 +1,73 @@
+# ===== 凭据与本地配置 =====
+.env
+.env.*
+!.env.example
+!.gitignore
+
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+venv/
+.venv/
+backend/.venv/
+demo/.venv/
+
+# ===== Node / 前端 =====
+node_modules/
+frontend/dist/
+*.tsbuildinfo
+
+# ===== 本地产物：抓取结果、截图、日志和浏览器会话 =====
+demo/output/
+demo/runtime/
+demo/browsers/
+demo/deepagent_detail_demo/artifacts/
+/backend/output/
+/backend/runtime/
+/backend/artifacts/
+/backend/agent_core/artifacts/
+**/storage_state.json
+**/*storage*state*
+
+# ===== 内部资料与旧实验目录 =====
+/demo/
+/docs/rental-agent/
+/research/
+data/
+logs/
+*.log
+
+# ===== 根目录调研临时文件 =====
+tmp_*
+collection.html
+umi.js
+
+# ===== IDE / 系统 =====
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# ===== 本地数据与备份 =====
+*.sqlite3
+*.db
+*.bak
+
+# ===== 本地审计临时文件 =====
+.scan_comments.txt
+.all_comments_utf8.txt
+
+# ===== 本地 Agent 约束：只在当前工作区生效，不上传 =====
+/agent.md
+# ===== 本地调研目录：包含外部仓库副本与下载包，不随项目发布 =====
+research/
+

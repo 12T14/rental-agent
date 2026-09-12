@@ -1,0 +1,22 @@
+{
+  "name": "rental-agent-frontend",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test:map": "node --test src/services/placeCandidates.test.js",
+    "test:chat": "node --test src/services/chatApi.test.js",
+    "test": "node --test src/services/*.test.js"
+  },
+  "dependencies": {
+    "@amap/amap-jsapi-loader": "^1.0.1",
+    "vue": "^3.5.13"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.2.1",
+    "vite": "^6.1.0"
+  }
+}

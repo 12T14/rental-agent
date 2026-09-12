@@ -1,0 +1,7 @@
+# Local environment values, including AMap JSAPI credentials.
+.env
+.env.*
+!.env.example
+
+# Generated Vite bundles may contain VITE_* values.
+dist/

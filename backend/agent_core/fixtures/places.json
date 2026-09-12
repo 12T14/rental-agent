@@ -1,0 +1,35 @@
+[
+  {
+    "id": "fixture-example-college",
+    "name": "示例园区",
+    "aliases": ["示例园区", "示例园区主园"],
+    "formatted_address": "江苏省示例市示例区示例路 155 号",
+    "city": "示例市",
+    "district": "示例区",
+    "adcode": "000001",
+    "lng": 120.28,
+    "lat": 31.98
+  },
+  {
+    "id": "fixture-example-scitech-city",
+    "name": "示例科创园",
+    "aliases": ["示例科创园", "科创园"],
+    "formatted_address": "江苏省示例市示例区示例湖中路",
+    "city": "示例市",
+    "district": "示例区",
+    "adcode": "000002",
+    "lng": 119.96,
+    "lat": 31.70
+  },
+  {
+    "id": "fixture-example-west-campus",
+    "name": "示例产业园东区",
+    "aliases": ["产业园东区", "东区"],
+    "formatted_address": "江苏省示例市示例区示例东大道",
+    "city": "示例市",
+    "district": "示例区",
+    "adcode": "000003",
+    "lng": 119.85,
+    "lat": 31.72
+  }
+]
