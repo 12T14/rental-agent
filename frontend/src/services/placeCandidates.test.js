@@ -7,6 +7,7 @@ import {
   candidateCoordinates,
   draftKeepsPlaceSelection,
   isResolvedLocationPayload,
+  locationResolutionCopy,
   mergePlaceIntoDraft,
   normalizeLocationCandidates
 } from './placeCandidates.js'
@@ -126,4 +127,15 @@ test('only treats an explicit non-ambiguous resolved payload as auto-confirmed',
   assert.equal(isResolvedLocationPayload({ status: 'resolved', requires_user_confirmation: true }), false)
   assert.equal(isResolvedLocationPayload({ status: 'candidates_ready', requires_user_confirmation: false }), false)
   assert.equal(isResolvedLocationPayload({ status: 'resolved' }), false)
+})
+
+test('explains why a location cannot be selected when the provider fails', () => {
+  assert.deepEqual(locationResolutionCopy('timeout'), {
+    title: '地点服务响应超时',
+    message: '本轮没有返回可选择的地点；可以稍后重试，或补充更完整的城市和地址。'
+  })
+  assert.deepEqual(locationResolutionCopy('not_configured'), {
+    title: '地点服务未配置',
+    message: '后端没有可用的高德地点服务配置，因此暂时无法生成可选择的坐标。'
+  })
 })

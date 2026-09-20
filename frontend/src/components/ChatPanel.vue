@@ -5,12 +5,12 @@
         <div v-if="message.role === 'assistant'" class="message-avatar">栖</div>
         <div class="message-body">
           <div v-if="message.role === 'assistant'" class="message-name">找房助手</div>
-          <div class="message-bubble" :class="{ plain: message.kind === 'progress' || message.kind === 'result' }">
+          <div class="message-bubble" :class="{ plain: message.kind === 'progress' }">
             <p v-for="(line, index) in message.text.split('\n')" :key="index">{{ line }}</p>
           </div>
 
           <div v-if="message.kind === 'activity'" class="activity-card">
-            <div class="activity-title"><span class="activity-spinner" :class="{ finished: !searching }"></span><strong>{{ searching ? '正在整理附近房源' : '本轮搜索已完成' }}</strong><small>{{ searching ? '按平台顺序读取公开列表' : '结果已汇总到下面的房源卡片' }}</small></div>
+            <div class="activity-title"><span class="activity-spinner" :class="{ finished: !searching }"></span><strong>{{ searching ? '正在整理附近房源' : '本轮搜索已完成' }}</strong><small>{{ searching ? '按平台顺序读取公开列表' : '结果已同步到右侧地图面板' }}</small></div>
             <div class="activity-platforms">
               <div v-for="platform in platforms" :key="platform.key" class="activity-platform">
                 <span class="activity-status" :class="platform.status">{{ platform.status === 'ok' || platform.status === 'partial' ? '✓' : platform.status === 'loading' ? '…' : platform.status === 'blocked' ? '!' : '·' }}</span>
@@ -21,20 +21,6 @@
             <button v-if="verification" class="verification-button" type="button" @click="emit('verify', verification.platformKey)">打开{{ verification.platformName }}验证窗口</button>
           </div>
 
-          <div v-if="message.kind === 'result'" class="result-block">
-            <div class="result-heading"><strong>为你挑出 {{ listings.length }} 条候选</strong><span>点击卡片可在地图定位</span></div>
-            <div class="chat-listings">
-              <article v-for="listing in listings.slice(0, 5)" :key="listing.id" class="chat-listing-card" :class="{ selected: selectedId === listing.id }" @click="emit('select-listing', listing.id)">
-                <div class="chat-card-top"><span class="source-badge" :class="listing.platformKey">{{ listing.platform }}</span><span>{{ listing.updated }}</span><button type="button" class="chat-save" :class="{ saved: listing.saved }" @click.stop="emit('toggle-save', listing)">{{ listing.saved ? '♥' : '♡' }}</button></div>
-                <h3>{{ listing.title }}</h3>
-                <p class="chat-card-meta">{{ listing.community }} · {{ listing.room }} · {{ listing.area }}㎡</p>
-                <div class="chat-card-bottom"><strong>¥{{ listing.rent }}<small>/月</small></strong><span :class="{ pending: listing.locationStatus === 'unverified' }">{{ listing.locationStatus === 'verified' ? `${listing.distance} km · ${listing.commute}` : '位置待核验' }}</span></div>
-                <div class="chat-tag-row"><span v-for="tag in listing.tags.slice(0, 3)" :key="tag">{{ tag }}</span></div>
-                <button class="chat-detail-link" type="button" @click.stop="emit('open-detail', listing)">查看房源概览 <span>→</span></button>
-              </article>
-            </div>
-            <div class="result-disclaimer">公开列表候选不等于当前可租，费用和联系方式请打开原平台核验。</div>
-          </div>
         </div>
       </div>
       <div v-if="searching" class="typing-row"><span class="message-avatar">栖</span><div class="typing-bubble"><i></i><i></i><i></i></div></div>
@@ -50,11 +36,13 @@
         @keydown.enter.exact.prevent="submitMessage"
       ></textarea>
       <button v-if="searching" class="stop-stream" type="button" title="停止生成" @click="emit('cancel')">■</button>
+      <button v-else-if="recoveryAvailable" class="recover-stream" type="button" title="恢复上次任务" aria-label="恢复上次任务" @click="emit('recover')">↻</button>
       <button v-else type="submit" :disabled="sendDisabled || !modelValue.trim()" title="发送">↑</button>
     </form>
     <div class="composer-note">
-      <span>⌁</span>
-      Agent 回复会实时显示；地图或通勤未配置时仍可继续按文字条件找房。
+      <span>{{ recoveryAvailable ? '↻' : '⌁' }}</span>
+      <span v-if="recoveryAvailable">上次任务尚未完成，请先恢复；当前草稿会保留。</span>
+      <span v-else>Agent 回复会实时显示；地图或通勤未配置时仍可继续按文字条件找房。</span>
     </div>
   </section>
 </template>
@@ -66,16 +54,15 @@ import { canSubmitChatMessage } from '../services/chatApi.js'
 
 const props = defineProps({
   messages: { type: Array, default: () => [] },
-  listings: { type: Array, default: () => [] },
   platforms: { type: Array, default: () => [] },
-  selectedId: { type: String, default: null },
   searching: { type: Boolean, default: false },
   sendDisabled: { type: Boolean, default: false },
+  recoveryAvailable: { type: Boolean, default: false },
   verification: { type: Object, default: null },
   modelValue: { type: String, default: '' }
 })
 
-const emit = defineEmits(['update:modelValue', 'send', 'cancel', 'select-listing', 'open-detail', 'toggle-save', 'verify'])
+const emit = defineEmits(['update:modelValue', 'send', 'recover', 'cancel', 'verify'])
 const scrollBox = ref(null)
 const composerInput = ref(null)
 

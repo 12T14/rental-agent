@@ -10,8 +10,63 @@ const TEXT_FIELDS = [
   'data_quality'
 ]
 
+const LOCATION_STATUS_COPY = Object.freeze({
+  timeout: {
+    title: '地点服务响应超时',
+    message: '本轮没有返回可选择的地点；可以稍后重试，或补充更完整的城市和地址。'
+  },
+  not_configured: {
+    title: '地点服务未配置',
+    message: '后端没有可用的高德地点服务配置，因此暂时无法生成可选择的坐标。'
+  },
+  quota_exceeded: {
+    title: '地点服务暂时达到限额',
+    message: '本轮没有返回可选择的地点；请稍后重试。'
+  },
+  provider_error: {
+    title: '地点服务暂时不可用',
+    message: '本轮没有返回可选择的地点；可以稍后重试，或直接在聊天中补充完整地址。'
+  },
+  no_match: {
+    title: '没有匹配到可定位地点',
+    message: '请补充城市、区县或更完整的地点名称，再让 Agent 继续解析。'
+  },
+  invalid_input: {
+    title: '地点名称不完整',
+    message: '请提供公司、学校、地标或具体地址名称。'
+  },
+  needs_city_confirmation: {
+    title: '需要确认地点所在城市',
+    message: '这些候选可能影响房源和通勤范围，请在聊天中确认城市或选择候选。'
+  },
+  city_conflict: {
+    title: '地点与城市条件不一致',
+    message: '请在聊天中确认正确的城市和地点后再继续搜索。'
+  },
+  needs_confirmation: {
+    title: '请选择目标地点',
+    message: '点击候选只会填入聊天草稿；发送下一条消息后，Agent 才会按该地点继续。'
+  },
+  candidates_ready: {
+    title: '请选择目标地点',
+    message: '点击候选只会填入聊天草稿；发送下一条消息后，Agent 才会按该地点继续。'
+  },
+  resolved: {
+    title: '目标地点已定位',
+    message: 'Agent 已采用这个地点；后续房源结果会以它作为目标。'
+  }
+})
+
 function asText(value) {
   return typeof value === 'string' ? value.trim() : ''
+}
+
+export function locationResolutionCopy(status) {
+  const normalized = asText(status).toLowerCase()
+  return LOCATION_STATUS_COPY[normalized] || {
+    title: '地点尚未解析',
+    message: '等待 Agent 返回可选择的地点。'
+  }
 }
 
 function asCoordinate(value, min, max) {

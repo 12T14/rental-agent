@@ -1,7 +1,14 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { canSubmitChatMessage, parseEventBlock, streamChat } from './chatApi.js'
+import {
+  canSubmitChatMessage,
+  clearArtifacts,
+  clearPlatformSessions,
+  deleteSession,
+  parseEventBlock,
+  streamChat
+} from './chatApi.js'
 
 
 test('parses SSE ids, event names and JSON payloads', () => {
@@ -82,4 +89,28 @@ test('rejects a response that closes without a done event', async () => {
   } finally {
     globalThis.fetch = originalFetch
   }
+})
+
+
+test('sends explicit session and privacy cleanup requests', async () => {
+  const originalFetch = globalThis.fetch
+  const calls = []
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url, method: options.method || 'GET' })
+    return Response.json({ ok: true })
+  }
+
+  try {
+    await deleteSession('session/1')
+    await clearPlatformSessions()
+    await clearArtifacts()
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+
+  assert.deepEqual(calls, [
+    { url: '/api/v1/sessions/session%2F1', method: 'DELETE' },
+    { url: '/api/v1/privacy/platform-sessions/clear', method: 'POST' },
+    { url: '/api/v1/privacy/artifacts/clear', method: 'POST' }
+  ])
 })

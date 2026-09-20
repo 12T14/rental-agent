@@ -3,7 +3,8 @@
     <div class="listing-heading">
       <div>
         <span class="panel-kicker">房源清单</span>
-        <h2>附近房源 <span v-if="!searching">{{ listings.length }}</span></h2>
+        <h2>{{ targetLocated ? '附近房源' : '房源候选' }} <span v-if="!searching">{{ listings.length }}</span></h2>
+        <small v-if="summaryLabel" class="listing-summary">{{ summaryLabel }}</small>
       </div>
       <div class="listing-controls">
         <select v-model="sortBy" aria-label="排序方式">
@@ -39,13 +40,15 @@
           <button class="save-button" type="button" :class="{ saved: listing.saved }" :title="listing.saved ? '取消收藏' : '收藏'" @click.stop="emit('toggle-save', listing)">{{ listing.saved ? '♥' : '♡' }}</button>
         </div>
         <h3>{{ listing.title }}</h3>
-        <div class="listing-meta"><span>{{ listing.room }}</span><b>·</b><span>{{ listing.area }}㎡</span><b>·</b><span>{{ listing.community }}</span></div>
-        <div class="listing-bottom">
-          <div class="rent-price"><strong>¥{{ listing.rent }}</strong><span>/月</span></div>
-          <div class="distance-info" :class="{ unverified: listing.locationStatus === 'unverified' }"><span>{{ listing.locationStatus === 'unverified' ? '⌖' : '↗' }}</span>{{ listing.locationStatus === 'unverified' ? '位置待核验' : `${listing.distance} km · ${listing.commute}` }}</div>
-        </div>
-        <div class="tag-row"><span v-for="tag in listing.tags.slice(0, 3)" :key="tag">{{ tag }}</span></div>
-        <div class="listing-card-footer"><span>{{ listing.locationStatus === 'verified' ? '位置已核验' : '列表地址待核验' }}</span><button type="button" @click.stop="emit('open-detail', listing)">查看概览 <span>→</span></button></div>
+        <div class="listing-meta"><span>{{ listing.listingType }}</span><b>·</b><span>{{ listing.room }}</span><b>·</b><span>{{ listing.area === null ? '面积未说明' : listing.area + '㎡' }}</span><b>·</b><span>{{ listingPlaceLabel(listing) }}</span></div>
+          <div class="listing-bottom">
+            <div class="rent-price"><strong>{{ listing.rent === null ? '租金未说明' : '¥' + listing.rent }}</strong><span v-if="listing.rent !== null">/月</span></div>
+           <div class="distance-info" :class="{ unverified: listing.locationStatus !== 'verified' }"><span>{{ listing.locationStatus === 'verified' ? '↗' : '⌖' }}</span>{{ formatListingDistance(listing) }} · {{ formatListingCommute(listing) }}</div>
+         </div>
+         <div class="tag-row"><span v-for="tag in listing.tags.slice(0, 3)" :key="tag">{{ tag }}</span></div>
+         <div class="listing-status-row"><span class="listing-status-chip" :class="listing.filterStatus">{{ filterStatusLabel(listing) }}</span><span>{{ locationStatusLabel(listing) }}</span></div>
+         <p v-if="listing.filterReasons?.length || listing.rankingReasons?.length" class="listing-reason">{{ listing.filterReasons?.[0] || listing.rankingReasons?.[0] }}</p>
+         <div class="listing-card-footer"><span>{{ listing.detailStatus === 'ok' ? '详情已读取' : (listingHasAddress(listing) ? '列表地址待核验' : '平台未提供地址') }}</span><button type="button" @click.stop="emit('open-detail', listing)">查看概览 <span>→</span></button></div>
       </article>
     </div>
 
@@ -57,27 +60,62 @@
 
 <script setup>
 import { computed, ref } from 'vue'
+import {
+  filterStatusLabel,
+  formatListingCommute,
+  formatListingDistance,
+  listingHasAddress,
+  listingPlaceLabel,
+  locationStatusLabel
+} from '../services/listingState.js'
 
 const props = defineProps({
   listings: { type: Array, default: () => [] },
   selectedId: { type: String, default: null },
-  searching: { type: Boolean, default: false }
+  searching: { type: Boolean, default: false },
+  searchSummary: { type: Object, default: null }
 })
 
 const emit = defineEmits(['select', 'open-detail', 'toggle-save', 'run-again'])
 const sortBy = ref('recommended')
 const filtersOpen = ref(false)
 const activeFilters = ref([])
+const targetLocated = computed(() => {
+  const status = props.searchSummary?.map_status
+  return status ? !['pending', 'not_requested'].includes(status) : true
+})
+
+const summaryLabel = computed(() => {
+  if (props.searching) return 'Agent 正在整理平台候选'
+  if (props.searchSummary?.offline) return '离线夹具结果，仅用于回归验证'
+  if (['pending', 'not_requested'].includes(props.searchSummary?.map_status)) return '目标位置待确认，距离和通勤未核验'
+  if (props.searchSummary?.map_status === 'partial') return '部分位置或通勤信息待核验'
+  return ''
+})
+
+function compareNullable(left, right) {
+  const leftNumber = typeof left === 'number' && Number.isFinite(left) ? left : null
+  const rightNumber = typeof right === 'number' && Number.isFinite(right) ? right : null
+  if (leftNumber === null && rightNumber === null) return 0
+  if (leftNumber === null) return 1
+  if (rightNumber === null) return -1
+  return leftNumber - rightNumber
+}
 
 const sortedListings = computed(() => {
   let output = [...props.listings]
   if (activeFilters.value.includes('已核验位置')) output = output.filter(item => item.locationStatus === 'verified')
   if (activeFilters.value.includes('独立卫浴')) output = output.filter(item => item.tags.includes('独立卫浴'))
   if (activeFilters.value.includes('可短租')) output = output.filter(item => item.tags.includes('可短租'))
-  if (sortBy.value === 'rent') output.sort((a, b) => a.rent - b.rent)
-  if (sortBy.value === 'distance') output.sort((a, b) => Number(a.distance) - Number(b.distance))
-  if (sortBy.value === 'updated') output.sort((a, b) => (a.updatedMinutes ?? 999) - (b.updatedMinutes ?? 999))
-  return output
+  const indexed = output.map((item, index) => ({ item, index }))
+  if (sortBy.value === 'rent') indexed.sort((a, b) => compareNullable(a.item.rent, b.item.rent) || a.index - b.index)
+  if (sortBy.value === 'distance') indexed.sort((a, b) => {
+    const left = a.item.locationStatus === 'verified' ? a.item.distance : null
+    const right = b.item.locationStatus === 'verified' ? b.item.distance : null
+    return compareNullable(left, right) || a.index - b.index
+  })
+  if (sortBy.value === 'updated') indexed.sort((a, b) => compareNullable(a.item.updatedMinutes, b.item.updatedMinutes) || a.index - b.index)
+  return indexed.map(entry => entry.item)
 })
 
 function toggleFilter(label) {

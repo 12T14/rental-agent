@@ -11,6 +11,8 @@ from fastapi.responses import JSONResponse
 
 from .agent_runtime import AgentRuntime, SessionStateError
 from .checkpoint_store import StorageUnavailable
+from .privacy import clear_artifacts, clear_platform_sessions
+from .session_title import generate_session_title
 from .api.chat import router as chat_router
 
 
@@ -21,7 +23,7 @@ def create_app(runtime: AgentRuntime | None = None) -> FastAPI:
         await app.state.agent_runtime.close()
 
     app = FastAPI(title="通勤找房 Agent API", version="0.2.0", lifespan=lifespan)
-    app.state.agent_runtime = runtime or AgentRuntime()
+    app.state.agent_runtime = runtime or AgentRuntime(title_generator=generate_session_title)
 
     @app.get("/health")
     async def health() -> dict[str, Any]:
@@ -71,6 +73,24 @@ def create_app(runtime: AgentRuntime | None = None) -> FastAPI:
         )
 
     app.include_router(chat_router, prefix="/api/v1")
+
+    @app.post("/api/v1/privacy/platform-sessions/clear")
+    async def clear_platform_session_data():
+        try:
+            return clear_platform_sessions()
+        except RuntimeError:
+            raise HTTPException(status_code=500, detail={
+                "code": "privacy_cleanup_failed", "message": "平台验证数据清理失败。"
+            }) from None
+
+    @app.post("/api/v1/privacy/artifacts/clear")
+    async def clear_local_artifacts():
+        try:
+            return clear_artifacts()
+        except RuntimeError:
+            raise HTTPException(status_code=500, detail={
+                "code": "privacy_cleanup_failed", "message": "本地抓取产物清理失败。"
+            }) from None
     return app
 
 

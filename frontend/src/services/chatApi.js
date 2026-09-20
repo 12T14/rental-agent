@@ -74,6 +74,24 @@ export function renameSession(sessionId, title) {
   })
 }
 
+export function deleteSession(sessionId) {
+  return sessionJson(`/${encodeURIComponent(sessionId)}`, { method: 'DELETE' })
+}
+
+async function privacyJson(path) {
+  const response = await fetch(`/api/v1/privacy/${path}`, { method: 'POST' })
+  if (!response.ok) throw await responseError(response)
+  return response.json()
+}
+
+export function clearPlatformSessions() {
+  return privacyJson('platform-sessions/clear')
+}
+
+export function clearArtifacts() {
+  return privacyJson('artifacts/clear')
+}
+
 async function postStream(sessionId, action, requestBody, onEvent, signal) {
 
   const response = await fetch(`/api/v1/sessions/${encodeURIComponent(sessionId)}/${action}/stream`, {

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import uuid
 from collections.abc import AsyncIterator
@@ -17,6 +18,7 @@ from ..schemas import ChatRequest, ResumeRequest, RecoverRequest, RenameSessionR
 
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 _SESSION_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _TIMEOUT_ERROR_NAMES = {
     "TimeoutError",
@@ -141,6 +143,15 @@ async def rename_session(
     return await runtime.rename_session(session_id, body.title)
 
 
+@router.delete("/sessions/{session_id}")
+async def delete_session(
+    session_id: str,
+    runtime: AgentRuntime = Depends(_runtime_from_request),
+):
+    _validate_session_id(session_id)
+    return await runtime.delete_session(session_id)
+
+
 def _stream_response(session_id: str, request: Request, agent_events) -> StreamingResponse:
     async def event_stream() -> AsyncIterator[str]:
         stream_id = uuid.uuid4().hex
@@ -155,7 +166,7 @@ def _stream_response(session_id: str, request: Request, agent_events) -> Streami
             "status",
             {"status": "running", "session_id": session_id, "stream_id": stream_id},
         )
-        outcome = "completed"
+        outcome: str | None = None
         try:
             async for item in agent_events:
                 if await request.is_disconnected():
@@ -169,7 +180,7 @@ def _stream_response(session_id: str, request: Request, agent_events) -> Streami
                 yield encode(item.event, data)
             if await request.is_disconnected():
                 return
-            yield encode("done", {"status": outcome, "session_id": session_id})
+            yield encode("done", {"status": outcome or "completed", "session_id": session_id})
         except DuplicateRequestError:
             if not await request.is_disconnected():
                 yield encode(
@@ -186,7 +197,15 @@ def _stream_response(session_id: str, request: Request, agent_events) -> Streami
             # 不要发送服务提供方的异常文本：其中可能包含凭据、URL、
             # 本地路径或模型请求细节。
             if not await request.is_disconnected():
-                if _is_storage_error(exc):
+                if outcome in {"completed", "interrupted"}:
+                    logger.warning(
+                        "Agent event stream ended after terminal status stream_id=%s error_type=%s status=%s",
+                        stream_id,
+                        type(exc).__name__,
+                        outcome,
+                    )
+                    yield encode("done", {"status": outcome, "session_id": session_id})
+                elif _is_storage_error(exc):
                     code, message = "storage_unavailable", "会话存储不可用，请检查存储模式、MongoDB 和 Python 依赖。"
                 elif isinstance(exc, SessionStateError):
                     code, message = exc.code, exc.message
@@ -195,14 +214,29 @@ def _stream_response(session_id: str, request: Request, agent_events) -> Streami
                     message = "模型响应超时，请稍后重试。可先刷新会话，再恢复上次任务。"
                 else:
                     code = "agent_error"
-                    message = "Agent 运行失败，请检查后端模型配置。"
-                yield encode(
-                    "error",
-                    {"error": {"code": code, "message": message}},
-                )
-                yield encode("done", {"status": "error", "session_id": session_id})
+                    message = "Agent 执行失败，请稍后重试；可以刷新会话查看已保存的进度。"
+                if outcome not in {"completed", "interrupted"}:
+                    logger.warning(
+                        "Agent event stream failed stream_id=%s error_type=%s",
+                        stream_id,
+                        type(exc).__name__,
+                    )
+                    yield encode(
+                        "error",
+                        {"error": {"code": code, "message": message}},
+                    )
+                    yield encode("done", {"status": "error", "session_id": session_id})
         finally:
-            await agent_events.aclose()
+            close = getattr(agent_events, "aclose", None)
+            if callable(close):
+                try:
+                    await close()
+                except Exception as exc:
+                    logger.warning(
+                        "Agent event stream close failed stream_id=%s error_type=%s",
+                        stream_id,
+                        type(exc).__name__,
+                    )
 
     return StreamingResponse(
         event_stream(),

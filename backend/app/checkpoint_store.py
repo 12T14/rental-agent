@@ -152,6 +152,22 @@ class CheckpointStore:
         except Exception:
             raise StorageUnavailable("无法读取会话列表") from None
 
+    def delete_session(self, session_id: str) -> None:
+        """删除应用会话及其 LangGraph thread 的 checkpoints/writes。"""
+
+        self.open()
+        try:
+            # saver.delete_thread() 在内存和 MongoDB 实现中都同时清理 checkpoints
+            # 与 pending writes；不要只删 agent_sessions。
+            self._saver.delete_thread(session_id)
+            if self._collection is not None:
+                self._collection.delete_one({"_id": session_id})
+            else:
+                with self._lock:
+                    self._documents.pop(session_id, None)
+        except Exception:
+            raise StorageUnavailable("无法删除会话存储") from None
+
     def close(self) -> None:
         with self._lock:
             if self._client is not None:

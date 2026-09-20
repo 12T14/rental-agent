@@ -26,8 +26,21 @@
 
       <div class="sidebar-section saved-section">
         <div class="section-label">我的收藏 <span class="count-pill">{{ savedListings.length }}</span></div>
-        <button v-for="item in savedListings" :key="item.id" class="saved-item" type="button" @click="selectListing(item.id)"><span class="saved-heart">♥</span><span>{{ item.community }}</span><small>¥{{ item.rent }}/月</small></button>
+       <button v-for="item in savedListings" :key="item.id" class="saved-item" type="button" @click="selectListing(item.id)"><span class="saved-heart">♥</span><span>{{ listingPlaceLabel(item) }}</span><small>{{ item.rent === null ? '租金未说明' : `¥${item.rent}/月` }}</small></button>
         <div v-if="!savedListings.length" class="saved-empty"><span class="saved-icon">♡</span><span>在房源卡片上收藏喜欢的房子</span></div>
+      </div>
+
+      <div class="sidebar-section privacy-section">
+        <div class="section-label">本地数据</div>
+        <button class="privacy-action danger" type="button" :disabled="!backendChatEnabled || !activeHistory || searching || Boolean(privacyBusy)" :aria-busy="privacyBusy === 'session'" @click="deleteActiveSession">
+          <span aria-hidden="true">⌫</span><span>删除当前会话</span>
+        </button>
+        <button class="privacy-action" type="button" :disabled="!backendChatEnabled || Boolean(privacyBusy)" :aria-busy="privacyBusy === 'platform'" @click="clearPlatformVerification">
+          <span aria-hidden="true">◌</span><span>清除平台验证数据</span>
+        </button>
+        <button class="privacy-action" type="button" :disabled="!backendChatEnabled || Boolean(privacyBusy)" :aria-busy="privacyBusy === 'artifacts'" @click="clearLocalArtifacts">
+          <span aria-hidden="true">⌁</span><span>清除抓取产物</span>
+        </button>
       </div>
 
       <div class="sidebar-foot">
@@ -58,55 +71,64 @@
               <p>直接说出你的工作地点和偏好，我会边聊边整理房源。</p>
             </div>
           </div>
-          <div v-if="historyLoading || sessionReadError || recoveryRequestId || pendingInterrupt" class="session-notice" role="status">
+          <div
+            v-if="historyLoading || sessionReadError || recoveryRequestId || pendingInterrupt || runtimeNotice"
+            class="session-notice"
+            :class="{ 'is-error': runtimeNotice?.tone === 'error' }"
+            role="status"
+          >
             <template v-if="historyLoading">正在读取会话…</template>
             <template v-else-if="sessionReadError">
               {{ sessionReadError }}
               <button type="button" @click="refreshCurrentSession">刷新会话</button>
             </template>
             <template v-else-if="recoveryRequestId">
-              上次任务尚未完成。可以恢复执行，也可以新建会话；未完成的工具步骤可能重试。
+              {{ runtimeNotice?.message || '上次任务尚未完成。可以恢复执行，也可以新建会话；未完成的工具步骤可能重试。' }}
               <button type="button" :disabled="searching" @click="handleChatMessage('', { recover: true })">恢复上次任务</button>
             </template>
-            <template v-else>助手正在等待你补充条件，直接在下方回复即可。</template>
+            <template v-else-if="pendingInterrupt">助手正在等待你补充条件，直接在下方回复即可。</template>
+            <template v-else>
+              {{ runtimeNotice.message }}
+              <button type="button" aria-label="关闭提示" @click="runtimeNotice = null">关闭</button>
+            </template>
           </div>
           <ChatPanel
-            ref="chatPanelRef"
             v-model="chatDraft"
             :messages="messages"
-            :listings="filteredListings"
             :platforms="platforms"
-            :selected-id="selectedListingId"
             :searching="searching"
             :send-disabled="historyLoading || Boolean(sessionReadError) || Boolean(recoveryRequestId)"
+            :recovery-available="Boolean(recoveryRequestId) && !historyLoading && !sessionReadError"
             :verification="verification"
             @send="handleChatMessage"
+            @recover="handleChatMessage('', { recover: true })"
             @cancel="cancelChat"
-            @select-listing="selectListing"
-            @open-detail="openDetail"
-            @toggle-save="toggleSaved"
             @verify="startVerification"
           />
         </section>
 
         <aside class="context-column">
-          <div class="context-heading"><div><h2>小地图</h2><p>查看目标地点和房源位置</p></div><span class="context-live"><i></i>在线</span></div>
+          <div class="context-heading"><div><h2>地点与房源</h2><p>Agent 的位置与搜索结果</p></div><span class="context-live"><i></i>在线</span></div>
           <MapPanel
             compact
             :target="target"
-            :listings="filteredListings"
+            :listings="displayListings"
             :place-candidates="placeCandidates"
             :selected-id="selectedListingId"
             :selected-place-ref="selectedPlaceRef"
             :confirmed-place-ref="confirmedPlaceRef"
-            :radius-km="criteria.radiusKm"
-            :busy="searching || historyLoading"
+            :location-resolution="locationResolution"
+            :search-active="searchActive"
+            :search-running="listingSearchRunning"
+            :search-summary="searchSummary"
+            :listing-total-count="eligibleListings.length"
+            :listing-remaining-count="remainingListingCount"
             @select="selectListing"
             @select-place="selectPlaceCandidate"
-            @confirm-place="confirmPlaceCandidate"
             @center="centerMap"
+            @load-more="loadMoreListings"
           />
-          <div v-if="selectedListing" class="selected-summary"><div class="summary-heading"><span>当前选中</span><button type="button" @click="selectedListingId = null">×</button></div><strong>{{ selectedListing.community }}</strong><p>¥{{ selectedListing.rent }}/月 · {{ selectedListing.room }}</p><button type="button" @click="openDetail(selectedListing)">查看房源概览 <span>→</span></button></div>
+          <div v-if="selectedListing" class="selected-summary"><div class="summary-heading"><span>当前选中</span><button type="button" @click="selectedListingId = null">×</button></div><strong>{{ listingPlaceLabel(selectedListing) }}</strong><p>{{ selectedListing.rent === null ? '租金未说明' : `¥${selectedListing.rent}/月` }} · {{ selectedListing.room }}</p><button type="button" @click="openDetail(selectedListing)">查看房源概览 <span>→</span></button></div>
         </aside>
       </section>
     </main>
@@ -116,12 +138,14 @@
         <div class="drawer-backdrop" @click="selectedListingId = null"></div>
         <div class="drawer-panel">
           <div class="drawer-header"><div><span class="drawer-kicker">房源概览</span><h2>{{ selectedListing.title }}</h2></div><button class="close-button" type="button" @click="selectedListingId = null">×</button></div>
-          <div class="drawer-price"><b>¥{{ selectedListing.rent }}</b><span>/月</span><span class="verified-chip">公开候选</span></div>
-          <div class="drawer-grid"><div><span>户型</span><strong>{{ selectedListing.room }}</strong></div><div><span>面积</span><strong>{{ selectedListing.area }}㎡</strong></div><div><span>距离目标</span><strong>{{ selectedListing.distance }} km</strong></div><div><span>通勤参考</span><strong>{{ selectedListing.commute }}</strong></div></div>
-          <div class="drawer-block"><span class="drawer-label">位置</span><p>{{ selectedListing.address }}</p><small v-if="selectedListing.locationStatus === 'unverified'" class="warning-text">位置尚未通过地理编码核验</small></div>
+          <div class="drawer-price"><b>{{ selectedListing.rent === null ? '租金未说明' : `¥${selectedListing.rent}` }}</b><span v-if="selectedListing.rent !== null">/月</span><span class="verified-chip">{{ selectedListing.offline ? '离线夹具' : '公开候选' }}</span></div>
+          <div class="drawer-grid"><div><span>户型</span><strong>{{ selectedListing.room }}</strong></div><div><span>面积</span><strong>{{ selectedListing.area === null ? '未说明' : `${selectedListing.area}㎡` }}</strong></div><div><span>距离目标</span><strong>{{ formatListingDistance(selectedListing) }}</strong></div><div><span>通勤参考</span><strong>{{ formatListingCommute(selectedListing) }}</strong></div></div>
+          <div class="drawer-block"><span class="drawer-label">位置</span><p>{{ listingAddressLabel(selectedListing) }}</p><small :class="selectedListing.locationStatus === 'verified' ? 'verified-text' : 'warning-text'">{{ listingLocationNotice(selectedListing) }}</small></div>
           <div class="drawer-block"><span class="drawer-label">来源与状态</span><div class="source-row"><span class="source-dot" :class="selectedListing.platformKey"></span>{{ selectedListing.platform }} · {{ selectedListing.updated }}</div></div>
+          <div v-if="detailFactEntries(selectedListing.detailFacts).length" class="drawer-block"><span class="drawer-label">详情页明确条件</span><div class="detail-facts"><div v-for="fact in detailFactEntries(selectedListing.detailFacts)" :key="fact.key"><span>{{ fact.label }}</span><strong>{{ fact.value }}</strong></div></div></div>
+          <div class="drawer-block ranking-block"><span class="drawer-label">条件判断</span><p class="filter-result" :class="selectedListing.filterStatus">{{ filterStatusLabel(selectedListing) }}</p><small v-if="selectedListing.filterReasons?.length">{{ selectedListing.filterReasons.join('；') }}</small><small v-if="selectedListing.rankingExplanation">{{ selectedListing.rankingExplanation }}</small></div>
           <div class="drawer-tags"><span v-for="tag in selectedListing.tags" :key="tag">{{ tag }}</span></div>
-          <div class="drawer-actions"><button class="primary-action" type="button" @click="openSource(selectedListing)">打开原平台 <span>↗</span></button><button class="secondary-action" type="button" @click="toggleSaved(selectedListing)">{{ selectedListing.saved ? '已收藏' : '收藏房源' }} <span>{{ selectedListing.saved ? '♥' : '♡' }}</span></button></div>
+          <div class="drawer-actions"><button class="primary-action" type="button" @click="openSource(selectedListing)">{{ selectedListing.urlType === 'source_list' ? '打开平台列表' : '打开原平台' }} <span>↗</span></button><button class="secondary-action" type="button" @click="toggleSaved(selectedListing)">{{ selectedListing.saved ? '已收藏' : '收藏房源' }} <span>{{ selectedListing.saved ? '♥' : '♡' }}</span></button></div>
           <p class="drawer-note">公开列表候选不等于当前可租，请打开原平台核验详情、费用和联系方式。</p>
         </div>
       </aside>
@@ -130,30 +154,52 @@
 </template>
 
 <script setup>
-import { computed, nextTick, onMounted, onBeforeUnmount, reactive, ref } from 'vue'
+import { computed, nextTick, onMounted, onBeforeUnmount, ref } from 'vue'
 import ChatPanel from './components/ChatPanel.vue'
 import MapPanel from './components/MapPanel.vue'
-import { canSubmitChatMessage, streamChat, streamResume, streamRecover, listSessions, getSession, renameSession } from './services/chatApi'
+import {
+  canSubmitChatMessage,
+  streamChat,
+  streamResume,
+  streamRecover,
+  listSessions,
+  getSession,
+  renameSession,
+  deleteSession,
+  clearPlatformSessions,
+  clearArtifacts
+} from './services/chatApi'
 import { createViewGuard, sessionAction } from './services/sessionState.js'
 import {
-  buildSearchContext,
   candidateArea,
+  buildSearchContext,
   draftKeepsPlaceSelection,
   isResolvedLocationPayload,
+  locationResolutionCopy,
   mergePlaceIntoDraft,
   normalizeLocationCandidates
 } from './services/placeCandidates.js'
+import {
+  applyDetailResults,
+  applyListingEnrichment,
+  defaultPlatformStatuses,
+  detailFactEntries,
+  filterStatusLabel,
+  formatListingCommute,
+  formatListingDistance,
+  listingAddressLabel,
+  listingLocationNotice,
+  listingPlaceLabel,
+  mergeSearchSummary,
+  normalizeListings,
+  normalizePlatformStatuses,
+  visibleListings
+} from './services/listingState.js'
 
-const defaultCriteria = { city: '', targetPlace: '', radiusKm: 3, maxRent: null, rentType: '不限', commuteMode: '公交', maxCommute: 45 }
-const criteria = reactive({ ...defaultCriteria })
 const target = ref({ name: '', address: '输入地点后选择一个定位结果', city: '', lng: null, lat: null, confidence: '待确认' })
-const placeSuggestions = []
 const listings = ref([])
-const platforms = ref([
-  { key: 'fifty-eight', name: '58同城', status: 'idle', label: '等待搜索', count: 0 },
-  { key: 'anjuke', name: '安居客', status: 'idle', label: '等待搜索', count: 0 },
-  { key: 'fang', name: '房天下', status: 'idle', label: '等待搜索', count: 0 }
-])
+const platforms = ref(defaultPlatformStatuses())
+const searchSummary = ref(null)
 const conversations = ref([])
 const messages = ref([
   { id: 'welcome', role: 'assistant', text: '你好，我是栖居找房助手。你可以直接告诉我工作地点、预算和通勤要求，我会帮你整理附近房源。' }
@@ -163,12 +209,13 @@ const selectedListingId = ref(null)
 const placeCandidates = ref([])
 const selectedPlaceRef = ref('')
 const confirmedPlaceRef = ref('')
-const pendingConfirmedPlaceRef = ref('')
-const pendingConfirmedPlace = ref(null)
+const pendingPlaceSelectionRef = ref('')
+const pendingPlaceSelection = ref(null)
+const locationResolution = ref(null)
 const chatDraft = ref('')
-const chatPanelRef = ref(null)
 const searching = ref(false)
 const searchActive = ref(false)
+const listingSearchRunning = ref(false)
 const verification = ref(null)
 const chatAbortController = ref(null)
 const backendChatEnabled = import.meta.env.VITE_USE_BACKEND_CHAT !== 'false'
@@ -176,34 +223,39 @@ const pendingInterrupt = ref(null)
 const recoveryRequestId = ref('')
 const historyLoading = ref(false)
 const sessionReadError = ref('')
+const runtimeNotice = ref(null)
 const storageMode = ref('')
+const privacyBusy = ref('')
+const LISTING_PAGE_SIZE = 20
+const listingDisplayLimit = ref(LISTING_PAGE_SIZE)
 const storageLabel = computed(() => !backendChatEnabled ? '仅使用本地离线数据'
   : storageMode.value === 'mongodb' ? 'MongoDB 会话持久化'
     : storageMode.value === 'memory' ? '内存存储：后端重启会丢失会话' : '尚未连接会话存储')
 const viewGuard = createViewGuard()
 let historyController = null
+let titleRefreshTimer = null
+let titleRefreshGeneration = 0
 const editingTitle = ref(false)
 const titleDraft = ref('')
 const titleInput = ref(null)
-let searchVersion = 0
 const selectedListing = computed(() => listings.value.find(item => item.id === selectedListingId.value))
 const savedListings = computed(() => listings.value.filter(item => item.saved))
 const activeConversation = computed(() => conversations.value.find(item => item.id === activeHistory.value))
 const sessionTitle = computed(() => activeConversation.value?.title || '新建会话')
-const confirmedPlace = computed(() => (
-  placeCandidates.value.find(item => item.candidate_ref === confirmedPlaceRef.value) || null
-))
-const filteredListings = computed(() => {
-  if (!searchActive.value || !criteria.targetPlace.trim()) return []
-  return listings.value.filter(item => {
-    const shared = /合租|次卧|单间/.test(`${item.room}${item.title}`)
-    const typeMatches = criteria.rentType === '不限' || (criteria.rentType === '合租' ? shared : !shared)
-    const budgetMatches = !criteria.maxRent || item.rent <= criteria.maxRent
-    const locationMatches = item.locationStatus === 'unverified' || Number(item.distance) <= Number(criteria.radiusKm)
-    const commuteMatches = item.locationStatus === 'unverified' || item.commuteValue <= Number(criteria.maxCommute)
-    return typeMatches && budgetMatches && locationMatches && commuteMatches
-  })
-})
+const eligibleListings = computed(() => searchActive.value ? visibleListings(listings.value) : [])
+const displayListings = computed(() => eligibleListings.value.slice(0, listingDisplayLimit.value))
+const remainingListingCount = computed(() => Math.max(0, eligibleListings.value.length - displayListings.value.length))
+
+function resetListingDisplayLimit() {
+  listingDisplayLimit.value = LISTING_PAGE_SIZE
+}
+
+function loadMoreListings() {
+  listingDisplayLimit.value = Math.min(
+    eligibleListings.value.length,
+    listingDisplayLimit.value + LISTING_PAGE_SIZE
+  )
+}
 
 function addMessage(message) {
   const id = `${Date.now()}-${Math.random()}`
@@ -213,6 +265,60 @@ function addMessage(message) {
 function updateMessage(id, patch) {
   const message = messages.value.find(item => item.id === id)
   if (message) Object.assign(message, patch)
+}
+function receivePlatformStatus(data) {
+  searchActive.value = true
+  platforms.value = normalizePlatformStatuses(data, platforms.value)
+  searchSummary.value = mergeSearchSummary(searchSummary.value, data)
+}
+function receiveListings(data) {
+  resetListingDisplayLimit()
+  listings.value = normalizeListings(data, listings.value)
+  searchActive.value = true
+  searchSummary.value = mergeSearchSummary(searchSummary.value, data)
+}
+function receiveListingDetails(data) {
+  listings.value = applyDetailResults(listings.value, data)
+  const summary = { detail_status: data?.status }
+  if (Object.prototype.hasOwnProperty.call(data || {}, 'offline')) summary.offline = data.offline
+  if (Object.prototype.hasOwnProperty.call(data || {}, 'retrieved_at')) summary.retrieved_at = data.retrieved_at
+  searchSummary.value = mergeSearchSummary(searchSummary.value, summary)
+}
+function receiveListingUpdate(data) {
+  listings.value = normalizeListings(data, listings.value)
+  searchActive.value = true
+  const summary = { detail_status: data?.detail_status ?? data?.status }
+  if (Object.prototype.hasOwnProperty.call(data || {}, 'offline')) summary.offline = data.offline
+  if (Object.prototype.hasOwnProperty.call(data || {}, 'retrieved_at')) summary.retrieved_at = data.retrieved_at
+  searchSummary.value = mergeSearchSummary(searchSummary.value, summary)
+}
+function receiveListingEnrichment(data) {
+  listings.value = applyListingEnrichment(listings.value, data)
+  searchActive.value = true
+  const mapTarget = data?.target
+  if (mapTarget && typeof mapTarget === 'object' && (mapTarget.name || mapTarget.lng !== undefined)) {
+    target.value = {
+      ...target.value,
+      name: mapTarget.name || target.value.name,
+      address: mapTarget.geocoded_address || mapTarget.formatted_address || target.value.address,
+      city: mapTarget.city || target.value.city,
+      district: mapTarget.district || target.value.district,
+      adcode: mapTarget.adcode || target.value.adcode,
+      lng: mapTarget.lng ?? target.value.lng,
+      lat: mapTarget.lat ?? target.value.lat,
+      candidate_ref: mapTarget.candidate_ref || target.value.candidate_ref || '',
+      confidence: target.value.confidence === '待确认'
+        ? (mapTarget.location_confidence || target.value.confidence)
+        : target.value.confidence
+    }
+  }
+  const summary = {
+    enrichment_status: data?.status,
+    map_status: data?.status,
+    criteria: data?.criteria,
+  }
+  if (Object.prototype.hasOwnProperty.call(data || {}, 'offline')) summary.offline = data.offline
+  searchSummary.value = mergeSearchSummary(searchSummary.value, summary)
 }
 const toolLabels = {
   resolve_target_place: '解析目标地点',
@@ -225,13 +331,6 @@ const toolLabels = {
 function toolLabel(name) {
   return toolLabels[name] || '处理找房任务'
 }
-function parseCriteria(text) {
-  const rent = text.match(/(\d{3,5})\s*(?:元|块)/); const radius = text.match(/(\d+(?:\.\d+)?)\s*(?:公里|km)/i); const commute = text.match(/(\d+)\s*分钟/)
-  if (rent) criteria.maxRent = Number(rent[1]); if (radius) criteria.radiusKm = Number(radius[1]); if (commute) criteria.maxCommute = Number(commute[1])
-  if (/合租/.test(text)) criteria.rentType = '合租'; else if (/整租/.test(text)) criteria.rentType = '整租'
-  if (/驾车|开车/.test(text)) criteria.commuteMode = '驾车'; else if (/骑行|骑车/.test(text)) criteria.commuteMode = '骑行'
-  const place = placeSuggestions.find(item => text.includes(item.name)); if (place) { criteria.targetPlace = place.name; criteria.city = place.city; target.value = { ...target.value, name: place.name, address: place.address, city: place.city, lng: place.lng, lat: place.lat, confidence: '高置信度' } }
-}
 function makeTitle(text) {
   const cleaned = text.replace(/[“”"。！？!?，,、]/g, ' ').replace(/\s+/g, ' ').trim()
   if (!cleaned) return '新建会话'
@@ -240,15 +339,64 @@ function makeTitle(text) {
 function ensureConversation(text) {
   if (!activeHistory.value) {
     const id = `h-${requestId()}`
-    conversations.value.unshift({ id, title: makeTitle(text), query: { ...criteria } })
+    conversations.value.unshift({ id, title: backendChatEnabled ? '新建会话' : makeTitle(text) })
     activeHistory.value = id
     rememberActiveSession(id)
-  } else if (activeConversation.value && activeConversation.value.title === '新建会话') {
+  } else if (!backendChatEnabled && activeConversation.value && activeConversation.value.title === '新建会话') {
     activeConversation.value.title = makeTitle(text)
   }
 }
 function requestId() {
   return globalThis.crypto?.randomUUID?.() || `req-${Date.now()}-${Math.random().toString(16).slice(2)}`
+}
+
+function cancelTitleRefresh() {
+  titleRefreshGeneration += 1
+  if (titleRefreshTimer !== null) {
+    globalThis.clearTimeout(titleRefreshTimer)
+    titleRefreshTimer = null
+  }
+}
+
+function scheduleTitleRefresh(sessionId) {
+  cancelTitleRefresh()
+  const generation = titleRefreshGeneration
+  const viewVersion = viewGuard.capture()
+  const delays = [250, 750, 1500, 3000, 5000]
+  let attempt = 0
+
+  const poll = async () => {
+    titleRefreshTimer = null
+    if (
+      generation !== titleRefreshGeneration
+      || !backendChatEnabled
+      || sessionId !== activeHistory.value
+      || searching.value
+      || !viewGuard.isCurrent(viewVersion)
+    ) return
+
+    try {
+      const state = await getSession(sessionId)
+      if (
+        generation !== titleRefreshGeneration
+        || sessionId !== activeHistory.value
+        || !viewGuard.isCurrent(viewVersion)
+      ) return
+      if (activeConversation.value) activeConversation.value.title = state.title
+      if (['model', 'user', 'fallback'].includes(state.title_source)) return
+    } catch {
+      // 标题是展示增强；本轮已完成时不因后台轮询失败打扰用户。
+      return
+    }
+
+    if (attempt < delays.length) {
+      titleRefreshTimer = globalThis.setTimeout(poll, delays[attempt])
+      attempt += 1
+    }
+  }
+
+  titleRefreshTimer = globalThis.setTimeout(poll, delays[attempt])
+  attempt += 1
 }
 
 function applyPlacePreview(candidate, confidence = '待用户确认') {
@@ -266,18 +414,28 @@ function applyPlacePreview(candidate, confidence = '待用户确认') {
 
 function receiveLocationCandidates(payload) {
   const nextCandidates = normalizeLocationCandidates(payload)
+  const status = typeof payload?.status === 'string' ? payload.status.trim().toLowerCase() : ''
+  const copy = locationResolutionCopy(status)
+  locationResolution.value = {
+    status,
+    title: copy.title,
+    message: copy.message,
+    query: typeof payload?.query === 'string' ? payload.query.trim() : '',
+    cityHint: typeof payload?.city_hint === 'string' ? payload.city_hint.trim() : '',
+    hasCandidates: nextCandidates.length > 0
+  }
   placeCandidates.value = nextCandidates
   if (!nextCandidates.length) {
     selectedPlaceRef.value = ''
     confirmedPlaceRef.value = ''
-    const unresolvedQuery = typeof payload?.query === 'string' ? payload.query.trim() : ''
-    const cityHint = typeof payload?.city_hint === 'string' ? payload.city_hint.trim() : ''
+    pendingPlaceSelectionRef.value = ''
+    pendingPlaceSelection.value = null
+    const unresolvedQuery = locationResolution.value.query
+    const cityHint = locationResolution.value.cityHint
     target.value = {
       ...target.value,
       name: unresolvedQuery || target.value.name,
-      address: payload?.status === 'not_configured'
-        ? '地图未配置，仍可继续按文字条件找房'
-        : '没有可定位的坐标，请补充城市或更具体的地址',
+      address: copy.message,
       city: cityHint,
       lng: null,
       lat: null,
@@ -290,9 +448,8 @@ function receiveLocationCandidates(payload) {
   const resolvedCandidate = isResolvedLocationPayload(payload) ? nextCandidates[0] : null
   if (resolvedCandidate) {
     confirmedPlaceRef.value = resolvedCandidate.candidate_ref
-    criteria.targetPlace = resolvedCandidate.name
-    if (resolvedCandidate.city) criteria.city = resolvedCandidate.city.replace(/市$/, '')
-    if (activeConversation.value) activeConversation.value.query = { ...criteria }
+    pendingPlaceSelectionRef.value = ''
+    pendingPlaceSelection.value = null
   }
 
   const confirmedCandidate = resolvedCandidate
@@ -304,7 +461,7 @@ function receiveLocationCandidates(payload) {
   selectedPlaceRef.value = selectedCandidate.candidate_ref
   applyPlacePreview(
     selectedCandidate,
-    resolvedCandidate ? '已定位' : (confirmedCandidate ? '已确认' : '待用户确认')
+    resolvedCandidate ? '已定位' : (confirmedCandidate ? '已选' : '待用户确认')
   )
 }
 
@@ -313,62 +470,53 @@ function findPlaceCandidate(candidate) {
 }
 
 function selectPlaceCandidate(candidate) {
+  if (searching.value) return
   const safeCandidate = findPlaceCandidate(candidate)
   if (!safeCandidate) return
+  const previousCandidate = findPlaceCandidate({ candidate_ref: selectedPlaceRef.value })
   selectedPlaceRef.value = safeCandidate.candidate_ref
+  confirmedPlaceRef.value = safeCandidate.candidate_ref
+  pendingPlaceSelectionRef.value = safeCandidate.candidate_ref
+  pendingPlaceSelection.value = safeCandidate
+  chatDraft.value = mergePlaceIntoDraft(chatDraft.value, safeCandidate, previousCandidate)
   applyPlacePreview(
     safeCandidate,
-    safeCandidate.candidate_ref === confirmedPlaceRef.value ? '已确认' : '待用户确认'
+    '已选'
   )
 }
 
-function confirmPlaceCandidate(candidate) {
-  const safeCandidate = findPlaceCandidate(candidate)
-  if (!safeCandidate || searching.value) return
-  const previousCandidate = confirmedPlace.value
-  chatDraft.value = mergePlaceIntoDraft(chatDraft.value, safeCandidate, previousCandidate)
-  selectedPlaceRef.value = safeCandidate.candidate_ref
-  confirmedPlaceRef.value = safeCandidate.candidate_ref
-  pendingConfirmedPlaceRef.value = safeCandidate.candidate_ref
-  pendingConfirmedPlace.value = safeCandidate
-  criteria.targetPlace = safeCandidate.name
-  if (safeCandidate.city) criteria.city = safeCandidate.city.replace(/市$/, '')
-  applyPlacePreview(safeCandidate, '已确认')
-  if (activeConversation.value) activeConversation.value.query = { ...criteria }
-  nextTick(() => chatPanelRef.value?.focusComposer())
+function currentSearchContext(message = '') {
+  const candidate = findPlaceCandidate({ candidate_ref: pendingPlaceSelectionRef.value })
+  if (!candidate || !draftKeepsPlaceSelection(message, candidate)) return null
+  return buildSearchContext(candidate)
 }
 
 async function handleChatMessage(text, { recover = false } = {}) {
   if (searching.value || historyLoading.value || sessionReadError.value) return
   if (recover ? !recoveryRequestId.value : !canSubmitChatMessage(text, Boolean(recoveryRequestId.value))) return
+  cancelTitleRefresh()
   text = text.trim()
-  const pendingPlaceAtSubmit = pendingConfirmedPlace.value?.candidate_ref === pendingConfirmedPlaceRef.value
-    ? pendingConfirmedPlace.value
-    : null
-  const submittedPlace = draftKeepsPlaceSelection(text, pendingPlaceAtSubmit)
-    ? pendingPlaceAtSubmit
-    : null
-  const submittedPlaceRef = submittedPlace?.candidate_ref || ''
-  if (pendingConfirmedPlaceRef.value && !submittedPlace) {
-    const staleReference = pendingConfirmedPlaceRef.value
-    pendingConfirmedPlaceRef.value = ''
-    pendingConfirmedPlace.value = null
-    if (confirmedPlaceRef.value === staleReference) confirmedPlaceRef.value = ''
-    if (target.value.candidate_ref === staleReference) {
-      target.value = { ...target.value, confidence: '待核验' }
+  const submittedPlaceRef = recover ? '' : pendingPlaceSelectionRef.value
+  const searchContext = recover ? null : currentSearchContext(text)
+  if (!recover && submittedPlaceRef && !searchContext) {
+    pendingPlaceSelectionRef.value = ''
+    pendingPlaceSelection.value = null
+    if (confirmedPlaceRef.value === submittedPlaceRef) {
+      confirmedPlaceRef.value = ''
+      if (target.value.candidate_ref === submittedPlaceRef) {
+        target.value = { ...target.value, confidence: '待确认' }
+      }
     }
   }
+  runtimeNotice.value = null
   if (!recover) {
     ensureConversation(text)
     messages.value.push({ id: `${Date.now()}-user`, role: 'user', text })
-    parseCriteria(text)
   }
-  if (!backendChatEnabled && /详情|怎么联系|联系方式|这套/.test(text) && selectedListing.value) {
-    addMessage({ text: '我已经把这套房源标记在右侧地图上了。联系方式和最新费用需要打开原平台页面核验。' })
+  if (!backendChatEnabled) {
+    runtimeNotice.value = { tone: 'error', message: '后端聊天当前未启用，无法运行找房 Agent。' }
     return
   }
-
-  if (!backendChatEnabled) { runSearch(); return }
 
   const sessionId = activeHistory.value
   const viewVersion = viewGuard.capture()
@@ -382,11 +530,7 @@ async function handleChatMessage(text, { recover = false } = {}) {
   const activeToolIds = new Set()
   let streamedMessageId = ''
   let replayed = false
-  let fallbackStarted = false
-  let turnFailed = false
-  let paused = false
-  let turnFeedback = ''
-  searchActive.value = false
+  const activeListingToolIds = new Set()
   searching.value = true
   selectedListingId.value = null
   verification.value = null
@@ -396,11 +540,11 @@ async function handleChatMessage(text, { recover = false } = {}) {
     const send = action === 'recover' ? streamRecover : action === 'resume' ? streamResume : streamChat
     await send({
       sessionId,
-      message: text,
-      clientRequestId: submittedRequestId,
-      interruptId: submittedInterruptId,
-      searchContext: buildSearchContext(submittedPlace),
-      signal: controller.signal,
+       message: text,
+       clientRequestId: submittedRequestId,
+       interruptId: submittedInterruptId,
+        searchContext,
+       signal: controller.signal,
       onEvent: ({ event, data }) => {
         if (!viewGuard.isCurrent(viewVersion) || chatAbortController.value !== controller) return
         if (event === 'status') {
@@ -418,8 +562,20 @@ async function handleChatMessage(text, { recover = false } = {}) {
         } else if (event === 'tool_start' && data?.tool_call_id) {
           const label = toolLabel(data.tool_name)
           const messageId = addMessage({ kind: 'progress', text: `${label}中…` })
-          toolMessageIds.set(data.tool_call_id, { messageId, label })
+          toolMessageIds.set(data.tool_call_id, { messageId, label, name: data.tool_name })
           activeToolIds.add(data.tool_call_id)
+          if (['search_rental_candidates', 'batch_fetch_listing_details'].includes(data.tool_name)) {
+            activeListingToolIds.add(data.tool_call_id)
+            listingSearchRunning.value = true
+          }
+          if (data.tool_name === 'search_rental_candidates') {
+            resetListingDisplayLimit()
+            searchActive.value = true
+            listings.value = []
+            searchSummary.value = { status: 'running' }
+            platforms.value = defaultPlatformStatuses('loading', '抓取中')
+            selectedListingId.value = null
+          }
         } else if (event === 'tool_end' && data?.tool_call_id) {
           const tool = toolMessageIds.get(data.tool_call_id)
           if (tool) {
@@ -428,15 +584,26 @@ async function handleChatMessage(text, { recover = false } = {}) {
             })
           }
           activeToolIds.delete(data.tool_call_id)
-      // 工具结果之后生成的文本属于下一条助手消息。
+          activeListingToolIds.delete(data.tool_call_id)
+          listingSearchRunning.value = activeListingToolIds.size > 0
+          // 工具结果之后生成的文本属于下一条助手消息。
           streamedMessageId = ''
         } else if (event === 'location_candidates') {
           receiveLocationCandidates(data)
+        } else if (event === 'platform_status') {
+          receivePlatformStatus(data)
+        } else if (event === 'listings') {
+          receiveListings(data)
+        } else if (event === 'listing_details') {
+          receiveListingDetails(data)
+        } else if (event === 'listing_update') {
+          receiveListingUpdate(data)
+        } else if (event === 'listing_enrichment') {
+          receiveListingEnrichment(data)
         } else if (event === 'assistant' && data?.text) {
           if (streamedMessageId) updateMessage(streamedMessageId, { text: data.text })
           else streamedMessageId = addMessage({ text: data.text })
         } else if (event === 'interrupt' && data?.interrupt_id) {
-          paused = true
           pendingInterrupt.value = data
           recoveryRequestId.value = ''
           updateMessage(progressMessageId, { text: '已保存进度，等待你补充条件。' })
@@ -445,36 +612,39 @@ async function handleChatMessage(text, { recover = false } = {}) {
             if (tool) updateMessage(tool.messageId, { text: `${tool.label}：已暂停。` })
           }
           activeToolIds.clear()
+          activeListingToolIds.clear()
+          listingSearchRunning.value = false
           addMessage({ text: data.message })
         } else if (event === 'error') {
-          turnFailed = true
           const message = data?.error?.message || 'Agent 暂时无法处理这条消息。'
-          turnFeedback = message
+          runtimeNotice.value = { tone: 'error', message }
           for (const toolId of activeToolIds) {
             const tool = toolMessageIds.get(toolId)
             if (tool) updateMessage(tool.messageId, { text: `${tool.label}未完成。` })
           }
           activeToolIds.clear()
+          activeListingToolIds.clear()
+          listingSearchRunning.value = false
           updateMessage(progressMessageId, { text: '本轮 Agent 处理失败。' })
-          addMessage({ text: message })
         } else if (event === 'done') {
           if (data?.status === 'completed') {
             pendingInterrupt.value = null
             recoveryRequestId.value = ''
+            runtimeNotice.value = null
             if (!replayed) updateMessage(progressMessageId, { text: '本轮 Agent 解析完成。' })
-            if (!turnFailed && pendingConfirmedPlaceRef.value === submittedPlaceRef) {
-              pendingConfirmedPlaceRef.value = ''
-              pendingConfirmedPlace.value = null
+            if (submittedPlaceRef && pendingPlaceSelectionRef.value === submittedPlaceRef) {
+              pendingPlaceSelectionRef.value = ''
+              pendingPlaceSelection.value = null
             }
           }
-          if (data?.status === 'interrupted') paused = true
+          listingSearchRunning.value = false
         }
       }
     })
   } catch (error) {
     if (!viewGuard.isCurrent(viewVersion)) return
     if (error?.name === 'AbortError') {
-      turnFeedback = '已停止本轮生成；若仍有未完成步骤，可以恢复上次任务。'
+      runtimeNotice.value = { tone: 'info', message: '已停止本轮生成；若仍有未完成步骤，可以恢复上次任务。' }
       if (chatAbortController.value === controller) {
         for (const toolId of activeToolIds) {
           const tool = toolMessageIds.get(toolId)
@@ -485,40 +655,28 @@ async function handleChatMessage(text, { recover = false } = {}) {
       return
     }
     if (error?.status) {
-      turnFeedback = error.message || '本轮请求未能开始。'
+      runtimeNotice.value = { tone: 'error', message: error.message || '本轮请求未能开始。' }
       updateMessage(progressMessageId, { text: '本轮请求未能开始。' })
-      addMessage({ text: error.message || '请求参数有误，请稍后重试。' })
-    } else if (!streamStarted.value && action === 'chat') {
+    } else if (!streamStarted.value) {
       updateMessage(progressMessageId, { text: '后端暂未连接。' })
-      addMessage({ kind: 'progress', text: '后端暂未连接，先展示本地离线示例。' })
-      fallbackStarted = true
-      runSearch()
+      runtimeNotice.value = { tone: 'error', message: '后端暂未连接，本轮没有运行找房 Agent。' }
     } else {
-      turnFeedback = '流式连接中断，以下为后端已保存的进度。'
+      runtimeNotice.value = { tone: 'error', message: '与后端的流式连接中断，正在读取后端已保存的状态。' }
       for (const toolId of activeToolIds) {
         const tool = toolMessageIds.get(toolId)
         if (tool) updateMessage(tool.messageId, { text: `${tool.label}未完成。` })
       }
       updateMessage(progressMessageId, { text: '流式连接意外中断。' })
-      addMessage({ text: '与后端的流式连接中断，请稍后重试。' })
     }
   } finally {
     if (chatAbortController.value === controller && viewGuard.isCurrent(viewVersion)) {
       chatAbortController.value = null
-      if (!fallbackStarted) searching.value = false
-      if (paused && pendingConfirmedPlaceRef.value === submittedPlaceRef) {
-        pendingConfirmedPlaceRef.value = ''
-        pendingConfirmedPlace.value = null
-      }
+      searching.value = false
+      listingSearchRunning.value = false
       // 出错或取消后也读取已保存状态；绝不自动重试工具。
-      if (!fallbackStarted) {
-        const state = await refreshCurrentSession({ feedback: turnFeedback })
-        if (viewGuard.isCurrent(viewVersion) && state?.latest_request_id === submittedRequestId
-            && ['completed', 'interrupted'].includes(state.status)
-            && pendingConfirmedPlaceRef.value === submittedPlaceRef) {
-          pendingConfirmedPlaceRef.value = ''
-          pendingConfirmedPlace.value = null
-        }
+      const state = await refreshCurrentSession()
+      if (state && ['completed', 'interrupted'].includes(state.status)) {
+        scheduleTitleRefresh(sessionId)
       }
     }
   }
@@ -526,30 +684,22 @@ async function handleChatMessage(text, { recover = false } = {}) {
 function cancelChat() {
   chatAbortController.value?.abort()
 }
-function runSearch() {
-  if (!criteria.targetPlace.trim()) { addMessage({ text: '请先告诉我一个公司、学校或地标名称，我才能开始定位。' }); return }
-  const version = ++searchVersion; searchActive.value = true; searching.value = true; selectedListingId.value = null; verification.value = null
-  const hasConfirmedTarget = Boolean(confirmedPlaceRef.value && target.value.candidate_ref === confirmedPlaceRef.value)
-  if (activeConversation.value) activeConversation.value.query = { ...criteria }
-  platforms.value = platforms.value.map(item => ({ ...item, status: 'loading', label: '抓取中' })); if (!hasConfirmedTarget) target.value = { ...target.value, name: criteria.targetPlace, address: `${criteria.city} · 正在解析地点地址`, city: criteria.city, confidence: '解析中' }
-  messages.value.push({ id: `${Date.now()}-activity`, role: 'assistant', kind: 'activity', text: '我正在按条件读取公开房源列表。' })
-  window.setTimeout(() => { if (version !== searchVersion) return; searching.value = false; const match = placeSuggestions.find(item => item.name === criteria.targetPlace); if (hasConfirmedTarget) target.value = { ...target.value, confidence: '已确认' }; else target.value = { ...target.value, address: match?.address || `${criteria.city} · ${criteria.targetPlace}`, city: match?.city || criteria.city, lng: match?.lng ?? target.value.lng, lat: match?.lat ?? target.value.lat, confidence: match ? '高置信度' : '待核验' }; platforms.value = platforms.value.map(item => ({ ...item, status: item.key === 'fang' ? 'partial' : 'ok', label: item.key === 'fang' ? '列表候选' : '已获取', count: item.key === 'fang' ? 1 : 2 })); addMessage({ kind: 'result', text: `目标地点已确认。我按“${criteria.rentType}、月租 ${criteria.maxRent ? `不超过 ${criteria.maxRent} 元` : '不限'}”整理了下面的候选。` }) }, 900)
-}
 function selectListing(id) { selectedListingId.value = id }
 function openDetail(item) { selectedListingId.value = item.id }
-function openSource(item) { if (item.detailUrl) window.open(item.detailUrl, '_blank', 'noopener,noreferrer'); else window.alert('本地离线示例未配置详情链接；联网结果会跳转到原平台页面。') }
+function openSource(item) { const url = item.detailUrl || item.sourceUrl; if (url) window.open(url, '_blank', 'noopener,noreferrer'); else window.alert('这条候选没有可打开的公开平台链接。') }
 function toggleSaved(item) { item.saved = !item.saved }
 function centerMap() { selectedListingId.value = null }
 function startVerification(platformKey) { const platform = platforms.value.find(item => item.key === platformKey); if (!platform) return; verification.value = { platformKey, platformName: platform.name }; platform.status = 'blocked'; platform.label = '等待验证' }
 async function loadHistory(item) {
   if (backendChatEnabled) {
+    cancelTitleRefresh()
     resetSearch()
     activeHistory.value = item.id
     rememberActiveSession(item.id)
     await refreshCurrentSession()
     return
   }
-  activeHistory.value = item.id; Object.assign(criteria, item.query); const place = placeSuggestions.find(value => value.name === item.query.targetPlace); placeCandidates.value = []; selectedPlaceRef.value = ''; confirmedPlaceRef.value = ''; pendingConfirmedPlaceRef.value = ''; pendingConfirmedPlace.value = null; chatDraft.value = ''; target.value = { ...target.value, name: item.query.targetPlace, address: place?.address || `${item.query.city} · ${item.query.targetPlace}`, city: place?.city || item.query.city, lng: place?.lng ?? null, lat: place?.lat ?? null, candidate_ref: '', confidence: place ? '高置信度' : '待核验' }; searchActive.value = true; selectedListingId.value = null; messages.value = [{ id: `${Date.now()}-history`, role: 'assistant', text: `已打开“${item.title}”这次会话。你可以继续追问，或者直接提出新的找房要求。` }, { id: `${Date.now()}-history-result`, role: 'assistant', kind: 'result', text: '这是该会话保存的本地离线候选快照。' }]
+  runtimeNotice.value = { tone: 'error', message: '后端聊天当前未启用，无法读取 Agent 会话。' }
 }
 async function startTitleEdit(item = activeConversation.value) {
   if (!item || searching.value || historyLoading.value) return
@@ -566,11 +716,60 @@ async function saveTitle() {
     item.title = value
     editingTitle.value = false
   } catch (error) {
-    if (activeHistory.value === item.id) addMessage({ text: error.message || '标题保存失败。' })
+    if (activeHistory.value === item.id) {
+      runtimeNotice.value = { tone: 'error', message: error.message || '标题保存失败。' }
+    }
   }
 }
 function cancelTitle() { editingTitle.value = false }
+
+async function deleteActiveSession() {
+  const sessionId = activeHistory.value
+  if (!sessionId || searching.value || privacyBusy.value || !backendChatEnabled) return
+  if (!globalThis.confirm?.('将删除聊天记录、房源结果和 Agent 执行状态，无法恢复。确定继续吗？')) return
+  privacyBusy.value = 'session'
+  try {
+    await deleteSession(sessionId)
+    conversations.value = conversations.value.filter(item => item.id !== sessionId)
+    resetSearch()
+    runtimeNotice.value = { tone: 'info', message: '当前会话已删除，聊天记录、房源结果和执行状态均已清理。' }
+  } catch (error) {
+    runtimeNotice.value = { tone: 'error', message: error.message || '当前会话删除失败。' }
+  } finally {
+    privacyBusy.value = ''
+  }
+}
+
+async function clearPlatformVerification() {
+  if (privacyBusy.value || !backendChatEnabled) return
+  if (!globalThis.confirm?.('将清除 58 同城、安居客和房天下的本地验证状态；聊天记录和房源结果不会删除。确定继续吗？')) return
+  privacyBusy.value = 'platform'
+  try {
+    await clearPlatformSessions()
+    runtimeNotice.value = { tone: 'info', message: '平台验证数据已清除，下次访问受限页面时可能需要重新验证。' }
+  } catch (error) {
+    runtimeNotice.value = { tone: 'error', message: error.message || '平台验证数据清理失败。' }
+  } finally {
+    privacyBusy.value = ''
+  }
+}
+
+async function clearLocalArtifacts() {
+  if (privacyBusy.value || !backendChatEnabled) return
+  if (!globalThis.confirm?.('将删除本地抓取产生的 HTML、JSON 和快照文件；聊天记录和结构化房源结果不会删除。确定继续吗？')) return
+  privacyBusy.value = 'artifacts'
+  try {
+    await clearArtifacts()
+    runtimeNotice.value = { tone: 'info', message: '本地抓取产物已清除，当前会话和房源展示未受影响。' }
+  } catch (error) {
+    runtimeNotice.value = { tone: 'error', message: error.message || '本地抓取产物清理失败。' }
+  } finally {
+    privacyBusy.value = ''
+  }
+}
+
 function resetSearch() {
+  cancelTitleRefresh()
   viewGuard.advance()
   historyController?.abort()
   historyController = null
@@ -578,9 +777,44 @@ function resetSearch() {
   pendingInterrupt.value = null
   recoveryRequestId.value = ''
   sessionReadError.value = ''
+  runtimeNotice.value = null
   editingTitle.value = false
   rememberActiveSession('')
-  const controller = chatAbortController.value; chatAbortController.value = null; controller?.abort(); searchVersion += 1; Object.assign(criteria, defaultCriteria); activeHistory.value = ''; searchActive.value = false; searching.value = false; selectedListingId.value = null; placeCandidates.value = []; selectedPlaceRef.value = ''; confirmedPlaceRef.value = ''; pendingConfirmedPlaceRef.value = ''; pendingConfirmedPlace.value = null; chatDraft.value = ''; verification.value = null; platforms.value = platforms.value.map(item => ({ ...item, status: 'idle', label: '等待搜索', count: 0 })); target.value = { ...target.value, name: '', address: '输入地点后选择一个定位结果', city: '', lng: null, lat: null, candidate_ref: '', confidence: '待确认' }; messages.value = [{ id: `${Date.now()}-new`, role: 'assistant', text: '新的找房会话已准备好。你可以直接说：“我在某某公司上班，预算 2000 元，想找整租。”' }]
+  const controller = chatAbortController.value
+  chatAbortController.value = null
+  controller?.abort()
+  activeHistory.value = ''
+  searchActive.value = false
+  listingSearchRunning.value = false
+  searching.value = false
+  selectedListingId.value = null
+  resetListingDisplayLimit()
+  listings.value = []
+  searchSummary.value = null
+  placeCandidates.value = []
+  selectedPlaceRef.value = ''
+  confirmedPlaceRef.value = ''
+  pendingPlaceSelectionRef.value = ''
+  pendingPlaceSelection.value = null
+  locationResolution.value = null
+  chatDraft.value = ''
+  verification.value = null
+  platforms.value = defaultPlatformStatuses()
+  target.value = {
+    ...target.value,
+    name: '',
+    address: '输入地点后选择一个定位结果',
+    city: '',
+    lng: null,
+    lat: null,
+    candidate_ref: '',
+    confidence: '待确认'
+  }
+  messages.value = [{
+    id: `${Date.now()}-new`,
+    role: 'assistant',
+    text: '新的找房会话已准备好。你可以直接说：“我在某某公司上班，预算 2000 元，想找整租。”'
+  }]
 }
 
 function rememberActiveSession(id) {
@@ -590,7 +824,7 @@ function rememberActiveSession(id) {
   } catch { /* 浏览器存储是可选的，以后端数据为准。 */ }
 }
 
-async function refreshCurrentSession({ feedback = '' } = {}) {
+async function refreshCurrentSession() {
   const sessionId = activeHistory.value
   if (!backendChatEnabled || !sessionId || searching.value) return
   const version = viewGuard.capture()
@@ -605,12 +839,37 @@ async function refreshCurrentSession({ feedback = '' } = {}) {
     pendingInterrupt.value = state.pending
     recoveryRequestId.value = state.recovery_request_id || ''
     storageMode.value = state.storage?.mode || ''
+    resetListingDisplayLimit()
+    listings.value = normalizeListings(state, listings.value)
+    platforms.value = Array.isArray(state.platforms) && state.platforms.length
+      ? normalizePlatformStatuses(state, platforms.value)
+      : defaultPlatformStatuses()
+    searchSummary.value = mergeSearchSummary(null, state.search)
+    searchActive.value = listings.value.length > 0 || Boolean(state.search)
     if (state.location) receiveLocationCandidates(state.location)
+    if (state.map?.target && typeof state.map.target === 'object') {
+      receiveListingEnrichment({
+        target: state.map.target,
+        listings: state.listings,
+        status: state.map.status,
+        criteria: state.search?.criteria
+      })
+    }
     if (activeConversation.value) activeConversation.value.title = state.title
-    sessionReadError.value = state.status === 'running'
-      ? '该会话仍在后端执行，请稍后刷新状态。'
-      : ''
-    if (feedback) addMessage({ kind: 'progress', text: feedback })
+    if (state.status === 'completed') {
+      pendingInterrupt.value = null
+      recoveryRequestId.value = ''
+      sessionReadError.value = ''
+      runtimeNotice.value = null
+    } else if (state.status === 'interrupted') {
+      recoveryRequestId.value = ''
+      sessionReadError.value = ''
+      runtimeNotice.value = null
+    } else {
+      sessionReadError.value = state.status === 'running'
+        ? '该会话仍在后端执行，请稍后刷新状态。'
+        : ''
+    }
     return state
   } catch (error) {
     if (!viewGuard.isCurrent(version) || historyController !== controller || error.name === 'AbortError') return
@@ -618,7 +877,7 @@ async function refreshCurrentSession({ feedback = '' } = {}) {
       pendingInterrupt.value = null
       recoveryRequestId.value = ''
       sessionReadError.value = ''
-      addMessage({ text: '后端没有这次会话的记录。若刚重启过内存模式，请重新发送需求。' })
+      runtimeNotice.value = { tone: 'error', message: '后端没有这次会话的记录。若刚重启过内存模式，请重新发送需求。' }
     } else {
       sessionReadError.value = error.message || '暂时无法读取会话，请刷新后继续。'
     }
@@ -646,13 +905,16 @@ onMounted(async () => {
     const selected = conversations.value.find(item => item.id === remembered) || conversations.value[0]
     if (selected) await loadHistory(selected)
   } catch {
-    if (viewGuard.isCurrent(version)) addMessage({ text: '尚未连接后端会话存储。可以启动后端后新建会话；目前没有加载本地离线历史。' })
+    if (viewGuard.isCurrent(version)) {
+      runtimeNotice.value = { tone: 'error', message: '尚未连接后端会话存储。启动后端后即可新建或继续会话。' }
+    }
   } finally {
     if (viewGuard.isCurrent(version)) historyLoading.value = false
   }
 })
 
 onBeforeUnmount(() => {
+  cancelTitleRefresh()
   viewGuard.advance()
   chatAbortController.value?.abort()
   historyController?.abort()
@@ -667,6 +929,11 @@ onBeforeUnmount(() => {
   background: #f2f6f3;
   color: #465e50;
   font-size: 13px;
+}
+.session-notice.is-error {
+  border: 1px solid #e4c2b6;
+  color: #825345;
+  background: #fff7f3;
 }
 .session-notice button {
   margin-left: 10px;

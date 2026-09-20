@@ -423,6 +423,12 @@ def _amap_timeout_seconds() -> float:
     return max(1.0, min(timeout, MAX_AMAP_TIMEOUT_SECONDS))
 
 
+def _amap_use_env_proxy() -> bool:
+    """默认绕过系统代理，避免本地代理接管高德请求时破坏 TLS。"""
+
+    return os.getenv("AMAP_USE_ENV_PROXY", "false").strip().lower() in {"1", "true", "yes", "on"}
+
+
 class AmapPlaceProvider:
     """高德输入提示 Web API 的小型固定端点适配器。"""
 
@@ -439,7 +445,12 @@ class AmapPlaceProvider:
             raise ValueError("AMap Web Service key is required")
         self._api_key = api_key.strip()
         self._timeout_seconds = max(1.0, min(float(timeout_seconds), MAX_AMAP_TIMEOUT_SECONDS))
-        self._session = session or requests.Session()
+        if session is None:
+            session = requests.Session()
+            # 某些本地代理/全局节点会让 Python 的 TLS 握手异常；
+            # HTTPS 证书校验仍保持开启，只默认不读取 HTTP(S)_PROXY。
+            session.trust_env = _amap_use_env_proxy()
+        self._session = session
 
     def _request_payload(self, params: dict[str, str]) -> dict[str, Any]:
         try:
@@ -553,7 +564,9 @@ def _base_result(
         "query": query.strip(),
         "city_hint": city_hint.strip(),
         "candidates": [candidate.as_dict() for candidate in (candidates or [])],
-        "requires_user_confirmation": status == "needs_confirmation",
+        "requires_user_confirmation": status in {
+            "needs_confirmation", "candidates_ready", "needs_city_confirmation"
+        },
         "message": message,
     }
 

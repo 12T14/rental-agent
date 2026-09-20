@@ -18,7 +18,8 @@ from html import unescape
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Optional
-from urllib.parse import quote, urljoin
+from urllib.parse import quote, urljoin, urlparse
+from platform_pages import create_platform_session, is_verification_page
 
 if sys.platform == "win32":
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -78,13 +79,37 @@ def _clean(value: str) -> str:
 def _is_blocked(text: str, current_url: str = "") -> bool:
     prefix = text[:800]
     return (
-        "antibot" in current_url
+        is_verification_page(text, current_url)
+        or "antibot" in current_url
         or "callback.58.com/antibot" in prefix
         or "访问过于频繁" in prefix
         or "请输入验证码" in prefix
         or ("验证码" in prefix and len(text) < 2_000)
         or len(text) < 300
     )
+
+
+def _58_city_from_url(value: str) -> str:
+    host = (urlparse(value).hostname or "").lower().rstrip(".")
+    if host == "58.com" or not host.endswith(".58.com"):
+        return ""
+    city = host.split(".", 1)[0]
+    return city if city in CITY_CODE else ""
+
+
+def _58_url_matches_city(value: str, city: str) -> bool:
+    actual_city = _58_city_from_url(value)
+    expected_city = (city or "").strip().lower()
+    return not expected_city or actual_city == expected_city
+
+
+def _58_listing_type(value: str) -> str:
+    path = (urlparse(value).path or "").lower()
+    if re.search(r"/(?:hezu)(?:/|$)", path):
+        return "合租"
+    if re.search(r"/(?:zufang)(?:/|$)", path):
+        return "整租"
+    return ""
 
 
 class _58CardParser(HTMLParser):
@@ -179,11 +204,14 @@ def parse_58_html(html: str, source_url: str, city: str = "", region: str = "") 
         tags = card.get("tags", "")
         tags = re.sub(r"^推荐理由[：:]?\s*", "", tags)
         href = urljoin(source_url, card.get("href", ""))
+        if not _58_url_matches_city(href, city):
+            continue
         listings.append({
             "title": title,
             "price": price,
             "monthly_rent_cny": price,
             "room": f"{layout_match.group(1)}室{layout_match.group(2)}厅",
+            "listing_type": _58_listing_type(href),
             "area": f"{area_match.group(1)}㎡",
             "area_sqm": float(area_match.group(1)),
             "tags": tags,
@@ -254,39 +282,11 @@ def create_58_session(
     """打开可见浏览器，并自动检测验证是否完成。"""
     if not session_file:
         raise ValueError("--session is required for --login")
-    try:
-        from playwright.sync_api import sync_playwright
-    except ImportError:
-        return _status("error", "", "当前 Python 没有 playwright；请使用项目虚拟环境的 Python。")
     url = target_url or _make_url(city, area, keyword)
-    target = Path(session_file).resolve()
-    target.parent.mkdir(parents=True, exist_ok=True)
     print("[58同城] 将打开可见浏览器。请在窗口中完成验证，程序会自动检测通过。", file=sys.stderr)
-    try:
-        with sync_playwright() as playwright:
-            browser = _launch_browser(playwright, headless=False)
-            context_kwargs = {"locale": "zh-CN", "viewport": {"width": 1440, "height": 900}}
-            if target.exists():
-                context_kwargs["storage_state"] = str(target)
-            context = browser.new_context(**context_kwargs)
-            page = context.new_page()
-            page.goto(url, wait_until="domcontentloaded", timeout=REQUEST_TIMEOUT)
-            deadline = time.monotonic() + max(1, wait_seconds)
-            verified = False
-            while time.monotonic() < deadline:
-                text = page.inner_text("body")
-                if not _is_blocked(text, page.url):
-                    verified = True
-                    break
-                page.wait_for_timeout(1_000)
-            if not verified:
-                browser.close()
-                return _status("error", url, "等待人工验证超时，未保存会话。", session_file=str(target))
-            context.storage_state(path=str(target))
-            browser.close()
-        return _status("ok", url, "人工验证通过，会话已保存；文件包含敏感登录状态，请勿提交到 Git。", session_file=str(target))
-    except Exception as exc:
-        return _status("error", url, f"生成会话失败: {exc}", session_file=str(target))
+    result = create_platform_session("58", url, session_file, wait_seconds)
+    return _status(result["status"], url, result["message"],
+                   session_file=str(Path(session_file).resolve())) | {"session_saved": result["session_saved"]}
 
 
 def scrape_58_status(
@@ -339,16 +339,35 @@ def scrape_58_status(
                 _write_status(result, status_output)
                 return result
 
+            if not _58_url_matches_city(current_url, city):
+                target_dir = Path(snapshot_dir) if snapshot_dir else OUTPUT_DIR
+                target_dir.mkdir(parents=True, exist_ok=True)
+                snapshot = _save_snapshot(html, city, area, target_dir)
+                actual_city = _58_city_from_url(current_url) or "unknown"
+                browser.close()
+                result = _status(
+                    "city_mismatch",
+                    url,
+                    f"58 将 {city} 城市请求跳转到了 {actual_city}，已拒绝跨城市房源。",
+                    snapshot_file=str(snapshot),
+                    session_file=str(session_path) if session_path else None,
+                )
+                result["expected_city"] = city
+                result["actual_city"] = actual_city
+                result["actual_source_page"] = current_url
+                _write_status(result, status_output)
+                return result
+
             target_dir = Path(snapshot_dir) if snapshot_dir else OUTPUT_DIR
             target_dir.mkdir(parents=True, exist_ok=True)
             snapshot = _save_snapshot(html, city, area, target_dir)
-            listings = parse_58_html(html, url, city, area)
+            listings = parse_58_html(html, current_url, city, area)
             browser.close()
 
         listings = listings[:max_listings]
         print(f"[58同城] 获取 {len(listings)} 条候选，详情链接 {sum(bool(x['url']) for x in listings)} 条", file=sys.stderr)
         print("[58同城] 页面快照已保存。", file=sys.stderr)
-        result = _status("ok", url, "公开列表页采集完成。详情页仍需用户核验。", listings, str(snapshot), str(session_path) if session_path else None)
+        result = _status("ok", current_url, "公开列表页采集完成。详情页仍需用户核验。", listings, str(snapshot), str(session_path) if session_path else None)
         if output:
             _write_status(result, output)
         _write_status(result, status_output)

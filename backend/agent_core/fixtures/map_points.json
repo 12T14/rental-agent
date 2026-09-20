@@ -1,0 +1,32 @@
+[
+  {
+    "id": "fixture-listing-campus-01",
+    "name": "大学城附近小区",
+    "formatted_address": "江苏省示例市示例区示例路 168 号",
+    "city": "示例市",
+    "district": "示例区",
+    "adcode": "000101",
+    "lng": 120.282,
+    "lat": 31.982
+  },
+  {
+    "id": "fixture-listing-garden-01",
+    "name": "示例花园(西区)",
+    "formatted_address": "江苏省示例市示例区示例湖中路 26 号",
+    "city": "示例市",
+    "district": "示例区",
+    "adcode": "000102",
+    "lng": 119.965,
+    "lat": 31.704
+  },
+  {
+    "id": "fixture-listing-bay-01",
+    "name": "清水湾花园一期",
+    "formatted_address": "江苏省示例市示例区示例东大道 88 号",
+    "city": "示例市",
+    "district": "示例区",
+    "adcode": "000103",
+    "lng": 119.854,
+    "lat": 31.724
+  }
+]

@@ -35,6 +35,9 @@ class MongoAdapterTests(unittest.TestCase):
             )
             collection.find_one.return_value = {"_id": "s1", **document}
             self.assertEqual(store.get("s1"), document)
+            store.delete_session("s1")
+            saver.delete_thread.assert_called_once_with("s1")
+            collection.delete_one.assert_called_once_with({"_id": "s1"})
             store.close()
             client.close.assert_called_once()
 
@@ -75,3 +78,14 @@ class MongoAdapterTests(unittest.TestCase):
         self.assertEqual(store.list(1)[0]["session_id"], "s2")
         self.assertEqual(store.list(1, 1)[0]["session_id"], "s1")
         self.assertNotIn("private", store.list()[0])
+
+    def test_memory_delete_removes_document_and_langgraph_thread(self):
+        store = CheckpointStore(StorageSettings())
+        saver = store.open()
+        saver.delete_thread = MagicMock()
+        store.save({"session_id": "s-delete", "title": "待删除", "updated_at": 1, "status": "completed"})
+
+        store.delete_session("s-delete")
+
+        saver.delete_thread.assert_called_once_with("s-delete")
+        self.assertIsNone(store.get("s-delete"))

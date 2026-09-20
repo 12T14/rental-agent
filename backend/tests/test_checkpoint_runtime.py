@@ -180,6 +180,26 @@ class CheckpointRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await fresh.list_sessions())["sessions"], [])
         self.assertFalse(fresh.store.info["persistent"])
 
+    async def test_legacy_session_without_listing_fields_remains_readable_and_writable(self):
+        calls = {}
+        runtime = make_runtime(calls, pause=False)
+        runtime.store.save({
+            "session_id": "legacy",
+            "title": "旧会话",
+            "status": "completed",
+            "messages": [{"id": "old", "role": "assistant", "text": "旧回复"}],
+        })
+
+        view = await runtime.get_session("legacy")
+        self.assertEqual(view["messages"][0]["text"], "旧回复")
+        self.assertEqual(view["listings"], [])
+        self.assertEqual(view["platforms"], [])
+        self.assertIsNone(view["search"])
+        self.assertIsNone(view["latest_request_id"])
+
+        await collect(runtime, "legacy", "新要求", "r1")
+        self.assertEqual((await runtime.get_session("legacy"))["status"], "completed")
+
     async def test_real_graph_cancellation_leaves_resumable_unfinished_node(self):
         started = asyncio.Event()
         calls = {"prepare": 0, "wait": 0}
