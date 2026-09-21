@@ -65,11 +65,12 @@ def build_rental_agent(checkpointer) -> AgentLike:
 
     from .agent_state import RentalAgentState
     from .preference_tool import request_rental_preferences
+    from .recommendation_tool import publish_rental_recommendations
 
     return build_agent(
         checkpointer=checkpointer,
         state_schema=RentalAgentState,
-        extra_tools=[request_rental_preferences],
+        extra_tools=[request_rental_preferences, publish_rental_recommendations],
     )
 
 
@@ -123,6 +124,7 @@ def _message_content(message: Any) -> str:
 
 _PUBLIC_LISTING_LIMIT = 60
 _PUBLIC_DETAIL_LIMIT = 20
+_PUBLIC_RECOMMENDATION_LIMIT = 5
 _PUBLIC_TEXT_LIMIT = 500
 _PUBLIC_TITLE_LIMIT = 300
 _PUBLIC_URL_LIMIT = 1200
@@ -475,6 +477,9 @@ def _safe_listing_projection(raw: Any, *, offline: bool) -> dict[str, Any] | Non
         region_evidence = ""
     return {
         "id": listing_id,
+        "displayNumber": _listing_number(_raw_first(raw, "displayNumber", "display_number")),
+        "recommendation": _safe_recommendation(raw.get("recommendation"))
+        if filter_status != "excluded" else None,
         "platformKey": platform_key or "other",
         "platform": platform,
         "title": title,
@@ -599,7 +604,10 @@ def _safe_search_payload(content: str | dict[str, Any]) -> dict[str, Any] | None
         for raw in raw_listings[:_PUBLIC_LISTING_LIMIT]:
             item = _safe_listing_projection(raw, offline=offline)
             if item is not None:
+                # Search is a new pool, not a recommendation.
+                item["recommendation"] = None
                 listings.append(item)
+    _ensure_listing_numbers(listings)
     source_status = _bounded_text(payload.get("status"), 80)
     status = _public_search_status(source_status, len(listings))
     blocked_hints = payload.get("blocked_hints")
@@ -703,6 +711,78 @@ def _safe_detail_batch_payload(content: str | dict[str, Any]) -> dict[str, Any] 
     return result
 
 
+def _listing_number(value: Any) -> int | None:
+    number = _safe_public_number(value, 1, _PUBLIC_LISTING_LIMIT)
+    return number if isinstance(number, int) else None
+
+
+def _ensure_listing_numbers(listings: list[dict[str, Any]]) -> None:
+    """Keep assigned numbers; fill legacy/malformed gaps without collisions."""
+    used = set()
+    for item in listings:
+        if not isinstance(item, dict):
+            continue
+        number = _listing_number(item.get("displayNumber"))
+        if number is not None and number not in used:
+            used.add(number)
+        else:
+            item["displayNumber"] = None
+    next_number = 1
+    for item in listings:
+        if not isinstance(item, dict) or item.get("displayNumber") is not None:
+            continue
+        while next_number in used:
+            next_number += 1
+        item["displayNumber"] = next_number
+        used.add(next_number)
+
+
+def _safe_recommendation(value: Any) -> dict[str, str] | None:
+    if not isinstance(value, dict):
+        return None
+    reason = _bounded_text(value.get("reason"), 500)
+    return {"reason": reason, "caveat": _bounded_text(value.get("caveat"), 500)} if reason else None
+
+
+def _validated_recommendations(raw: Any, listings: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Only verified, hard-filtered IDs may be highlighted; never trust model numbering."""
+    by_id = {item["id"]: item for item in listings}
+    seen = set()
+    result = []
+    for entry in raw[:_PUBLIC_RECOMMENDATION_LIMIT] if isinstance(raw, list) else []:
+        if not isinstance(entry, dict):
+            continue
+        listing_id = _bounded_text(entry.get("listing_id"), 128)
+        listing = by_id.get(listing_id)
+        recommendation = _safe_recommendation(entry)
+        if not listing or not recommendation or listing_id in seen:
+            continue
+        filter_status = _bounded_text(
+            _raw_first(listing, "filter_status", "filterStatus"), 30
+        ).lower()
+        detail_status = _bounded_text(
+            _raw_first(listing, "detail_status", "detailStatus"), 40
+        ).lower()
+        geocode_status = _bounded_text(
+            _raw_first(listing, "geocode_status", "geocodeStatus"), 40
+        ).lower()
+        commute_status = _bounded_text(
+            _raw_first(listing, "commute_status", "commuteStatus"), 40
+        ).lower()
+        if filter_status != "passed" or detail_status != "ok":
+            continue
+        if geocode_status == "city_conflict" or commute_status == "city_conflict":
+            continue
+        seen.add(listing_id)
+        result.append({
+            "listing_id": listing_id,
+            "display_number": listing.get("displayNumber"),
+            "detail_status": detail_status,
+            **recommendation,
+        })
+    return result
+
+
 def _merge_detail_into_listings(listings: list[dict[str, Any]], detail_payload: dict[str, Any]) -> list[dict[str, Any]]:
     details = detail_payload.get("details", [])
     detail_by_url = {
@@ -768,7 +848,12 @@ def _carry_forward_successful_details(
     return _merge_detail_into_listings(listings, {"details": details})
 
 
-def _extract_listing_events(messages: list[Any], base_listings: list[dict[str, Any]] | None = None):
+def _extract_listing_events(
+    messages: list[Any],
+    base_listings: list[dict[str, Any]] | None = None,
+    *,
+    criteria: SearchCriteria | None = None,
+):
     """从 checkpoint 工具消息生成稳定的公开房源事件和最新投影。"""
 
     current_listings = [dict(item) for item in (base_listings or []) if isinstance(item, dict)]
@@ -847,6 +932,29 @@ def _extract_listing_events(messages: list[Any], base_listings: list[dict[str, A
             if "retrieved_at" in projection:
                 update_event["retrieved_at"] = projection["retrieved_at"]
             events.append(("listing_update", update_event))
+        elif tool_name == "publish_rental_recommendations":
+            try:
+                payload = json.loads(content)
+            except (TypeError, ValueError):
+                continue
+            if not isinstance(payload, dict) or payload.get("status") != "ok":
+                continue
+            if criteria is not None:
+                # Re-evaluate follow-ups before applying highlights: a previously
+                # excluded house can qualify after the user relaxes the budget.
+                current_listings = [
+                    projected for item in rank_listings(current_listings, criteria)
+                    if (projected := _safe_listing_projection(item, offline=bool(item.get("offline"))))
+                ]
+            recommendations = _validated_recommendations(payload.get("recommendations"), current_listings)
+            by_id = {item["listing_id"]: item for item in recommendations}
+            current_listings = [
+                {**item, "recommendation": _safe_recommendation(by_id.get(item["id"]))}
+                for item in current_listings
+            ]
+            events.append(("listing_recommendations", {
+                "listings": current_listings, "recommendation_count": len(recommendations),
+            }))
     return events, current_listings, latest_platforms, latest_result
 
 
@@ -855,7 +963,7 @@ def _public_event_key(event: str, data: dict[str, Any]) -> str:
 
 
 _STRUCTURED_LISTING_EVENTS = frozenset(
-    {"platform_status", "listings", "listing_details", "listing_update", "listing_enrichment"}
+    {"platform_status", "listings", "listing_details", "listing_update", "listing_enrichment", "listing_recommendations"}
 )
 
 
@@ -866,7 +974,7 @@ def _apply_structured_event(document: dict[str, Any], event: str, data: dict[str
         platforms = data.get("platforms")
         if isinstance(platforms, list):
             document["platforms"] = platforms
-    elif event in {"listings", "listing_update"}:
+    elif event in {"listings", "listing_update", "listing_recommendations"}:
         listings = data.get("listings")
         if isinstance(listings, list):
             document["listings"] = listings
@@ -992,11 +1100,13 @@ _CONFIRMED_TARGET_KEYS = (
 _VISIBLE_TOOL_NAMES = frozenset(
     {
         "resolve_target_place",
+        "confirm_target_place",
         "search_rental_candidates",
         "batch_fetch_listing_details",
         "human_verify_rental_platform",
         "playwright_browser",
         "request_rental_preferences",
+        "publish_rental_recommendations",
     }
 )
 
@@ -1094,7 +1204,92 @@ def _selection_name_text(message: str) -> str:
     return compact
 
 
-def _candidate_for_location_selection(location: dict[str, Any], message: str) -> dict[str, Any] | None:
+def _candidate_match_score(candidate: dict[str, Any], needle: str) -> int:
+    """按候选名称和地址给自然语言地点选择打一个保守分数。"""
+
+    if not needle:
+        return 0
+    values = [
+        _selection_compact(candidate.get("name")),
+        _selection_compact(candidate.get("formatted_address")),
+        _selection_compact(candidate.get("candidate_ref")),
+    ]
+    best = 0
+    for value in values:
+        if not value:
+            continue
+        if value == needle:
+            best = max(best, 10000 + len(value))
+        elif value in needle or needle in value:
+            best = max(best, 5000 + min(len(value), len(needle)))
+        else:
+            # 对“科教城校区那个”这类自然表达保留最长连续片段；
+            # 过短的“学校”“校区”“附近”等通用词不能单独完成确认。
+            common = 0
+            previous = [0] * (len(needle) + 1)
+            for left in value:
+                current_row = [0]
+                for index, right in enumerate(needle, start=1):
+                    length = previous[index - 1] + 1 if left == right else 0
+                    current_row.append(length)
+                    common = max(common, length)
+                previous = current_row
+            if common >= 3:
+                best = max(best, 1000 + common)
+    return best
+
+
+def _assistant_letter_selection(
+    location: dict[str, Any],
+    message: str,
+    conversation_messages: list[Any] | tuple[Any, ...] = (),
+) -> dict[str, Any] | None:
+    """兼容 Agent 上一条消息展示的 A/B 选项，但不把字母固定绑定数组序号。"""
+
+    compact = _selection_compact(message)
+    if len(compact) != 1 or compact not in "abcdefghijklmnopqrstuvwxyz":
+        return None
+    previous_text = ""
+    for item in reversed(conversation_messages):
+        if _message_role(item) in {"assistant", "ai"}:
+            previous_text = _message_content(item)
+            if previous_text:
+                break
+    if not previous_text:
+        return None
+
+    candidates = [
+        item for item in location.get("candidates", [])
+        if isinstance(item, dict) and item.get("name")
+    ]
+    options = re.findall(
+        r"(?:^|\n)\s*(?:[-*]\s*)?\*{0,2}([A-Za-z])\s*[.、:：)]\s*"
+        r"\*{0,2}\s*(.+?)(?=\n\s*(?:[-*]\s*)?\*{0,2}[A-Za-z]\s*[.、:：)]|\Z)",
+        previous_text,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    for label, option_text in options:
+        if label.lower() != compact:
+            continue
+        scored = [
+            (score, candidate)
+            for candidate in candidates
+            if (score := _candidate_match_score(candidate, _selection_compact(option_text))) > 0
+        ]
+        if not scored:
+            continue
+        best_score = max(score for score, _ in scored)
+        best = [candidate for score, candidate in scored if score == best_score]
+        if len(best) == 1:
+            return best[0]
+    return None
+
+
+def _candidate_for_location_selection(
+    location: dict[str, Any],
+    message: str,
+    conversation_messages: list[Any] | tuple[Any, ...] = (),
+) -> dict[str, Any] | None:
     if location.get("status") not in _LOCATION_SELECTION_STATUSES:
         return None
     candidates = location.get("candidates")
@@ -1107,6 +1302,10 @@ def _candidate_for_location_selection(location: dict[str, Any], message: str) ->
     index = _selection_index(message)
     if index is not None:
         return candidates[index - 1] if index <= len(candidates) else None
+
+    letter_selection = _assistant_letter_selection(location, message, conversation_messages)
+    if letter_selection is not None:
+        return letter_selection
 
     needle = _selection_name_text(message)
     if not needle:
@@ -1125,18 +1324,16 @@ def _candidate_for_location_selection(location: dict[str, Any], message: str) ->
 
     # 允许“我选南京大学鼓楼校区”这类自然表达，但多个候选都包含
     # 同一短名称时必须保持歧义，不替用户猜测。
-    contained = [
-        candidate for candidate in candidates
-        if _selection_compact(candidate.get("name"))
-        and _selection_compact(candidate.get("name")) in needle
+    scored = [
+        (score, candidate)
+        for candidate in candidates
+        if (score := _candidate_match_score(candidate, needle)) > 0
     ]
-    if not contained:
+    if not scored:
         return None
-    longest = max(len(_selection_compact(item.get("name"))) for item in contained)
-    longest_matches = [
-        item for item in contained if len(_selection_compact(item.get("name"))) == longest
-    ]
-    return longest_matches[0] if len(longest_matches) == 1 else None
+    best_score = max(score for score, _ in scored)
+    best = [candidate for score, candidate in scored if score == best_score]
+    return best[0] if len(best) == 1 else None
 
 
 def _confirmed_target_from_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
@@ -1203,7 +1400,11 @@ def _effective_search_context(
             None,
         )
     if selected is None and location.get("status") in _LOCATION_SELECTION_STATUSES:
-        selected = _candidate_for_location_selection(location, message)
+        selected = _candidate_for_location_selection(
+            location,
+            message,
+            (document or {}).get("messages", []) if isinstance(document, dict) else (),
+        )
     if selected is None:
         if explicit_target:
             # 候选集存在时，显式上下文必须能和其中一项配对；否则不能
@@ -1216,6 +1417,48 @@ def _effective_search_context(
         return {}, None, bool(explicit_target)
     resolved = _resolved_location_payload(location, selected)
     return {"confirmed_target": target}, resolved, False
+
+
+def _safe_location_confirmation(content: str | dict[str, Any]) -> str:
+    """读取 confirm_target_place 的最小安全投影。"""
+
+    if isinstance(content, dict):
+        payload = content
+    else:
+        try:
+            payload = json.loads(content)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return ""
+    if not isinstance(payload, dict) or payload.get("status") != "confirmed":
+        return ""
+    reference = payload.get("candidate_ref")
+    if not isinstance(reference, str):
+        return ""
+    reference = reference.strip()
+    return reference if re.fullmatch(r"[A-Za-z0-9_-]{1,128}", reference) else ""
+
+
+def _resolve_location_confirmation(
+    location: dict[str, Any] | None,
+    candidate_ref: str,
+) -> dict[str, Any] | None:
+    """只把当前会话候选集中的引用转换为 resolved 地点。"""
+
+    if not isinstance(location, dict):
+        return None
+    candidates = location.get("candidates")
+    if not isinstance(candidates, list):
+        return None
+    selected = next(
+        (
+            item for item in candidates
+            if isinstance(item, dict)
+            and item.get("candidate_ref") == candidate_ref
+            and item.get("name")
+        ),
+        None,
+    )
+    return _resolved_location_payload(location, selected) if selected is not None else None
 
 
 def _safe_criteria_projection(criteria: SearchCriteria | dict[str, Any] | None) -> dict[str, Any]:
@@ -1410,6 +1653,8 @@ def _normalize_session_document(document: dict[str, Any] | None, session_id: str
     for key in ("messages", "listings", "platforms"):
         if not isinstance(document.get(key), list):
             document[key] = []
+    # One-time numbering for pre-contract history. Never reassign on sorting.
+    _ensure_listing_numbers(document["listings"])
     requests = document.get("requests")
     if not isinstance(requests, list):
         document["requests"] = []
@@ -1726,7 +1971,8 @@ class AgentRuntime:
             return False
         new_messages = list(snapshot.values.get("messages", []))[record["baseline"]:]
         listing_events, listings, platforms, search_summary = _extract_listing_events(
-            new_messages, record.get("_base_listings", document.get("listings", []))
+            new_messages, record.get("_base_listings", document.get("listings", [])),
+            criteria=_effective_search_criteria(document),
         )
         if listings or "listings" in document:
             document["listings"] = listings
@@ -1869,6 +2115,11 @@ class AgentRuntime:
                     yield AgentStreamEvent("turn_status", {"status": document["status"]})
                     return
 
+            listing_context = {
+                "rental_base_listings": record.get("_base_listings", document.get("listings", [])),
+                "rental_listing_baseline": record["baseline"],
+                "rental_criteria": _effective_search_criteria(document).as_dict(),
+            }
             if snapshot.values.get("rental_request") == record["id"]:
                 payload = None  # 只重试尚未完成的节点，绝不重复追加用户消息。
             elif record["kind"] == "resume":
@@ -1877,14 +2128,18 @@ class AgentRuntime:
                     raise SessionStateError("stale_interrupt", "暂停状态已经变化，请刷新会话。")
                 payload = Command(
                     resume={record["interrupt_id"]: record["agent_text"]},
-                    update={"rental_request": record["id"]},
+                    update={"rental_request": record["id"], **listing_context},
                 )
             else:
                 payload = {
                     "messages": [{"role": "user", "content": record["agent_text"], "id": f"user-{record['id']}"}],
                     "rental_request": record["id"],
+                    **listing_context,
                 }
-            stream = self._stream_graph(agent, payload, config, document.get("listings", []))
+            stream = self._stream_graph(
+                agent, payload, config, document.get("listings", []),
+                criteria=_effective_search_criteria(document),
+            )
             emitted_public_events: set[str] = set()
             try:
                 async for event in stream:
@@ -1906,6 +2161,23 @@ class AgentRuntime:
                         record["location"] = location_event
                         document["location"] = location_event
                         await self._save(document)
+                    elif event.event == "location_confirmed":
+                        current_location = record.get("location") or document.get("location")
+                        reference = str(event.data.get("candidate_ref") or "").strip()
+                        location_event = _resolve_location_confirmation(
+                            current_location, reference
+                        )
+                        if location_event is not None:
+                            record["location"] = location_event
+                            document["location"] = location_event
+                            public_event = AgentStreamEvent(
+                                "location_candidates", location_event
+                            )
+                            emitted_public_events.add(
+                                _public_event_key(public_event.event, public_event.data)
+                            )
+                            await self._save(document)
+                            yield public_event
                     elif event.event in _STRUCTURED_LISTING_EVENTS:
                         event_key = _public_event_key(event.event, event.data)
                         emitted_public_events.add(event_key)
@@ -1925,7 +2197,7 @@ class AgentRuntime:
                 yield AgentStreamEvent(event["event"], event["data"])
             yield AgentStreamEvent("turn_status", {"status": document["status"]})
 
-    async def _stream_graph(self, agent, payload, config, base_listings=None):
+    async def _stream_graph(self, agent, payload, config, base_listings=None, *, criteria=None):
         raw_to_public_id, public_tool_names, pending_by_name = {}, {}, {}
         ended_tool_ids, emitted_location_keys, emitted_listing_keys = set(), set(), set()
         streamed_listings: list[dict[str, Any]] = [
@@ -1985,9 +2257,16 @@ class AgentRuntime:
                     if location is not None and key not in emitted_location_keys:
                         emitted_location_keys.add(key)
                         yield AgentStreamEvent("location_candidates", location)
-                if tool_name in {"search_rental_candidates", "batch_fetch_listing_details"}:
+                elif tool_name == "confirm_target_place":
+                    reference = _safe_location_confirmation(_message_content(streamed_message))
+                    if reference:
+                        yield AgentStreamEvent(
+                            "location_confirmed",
+                            {"candidate_ref": reference},
+                        )
+                if tool_name in {"search_rental_candidates", "batch_fetch_listing_details", "publish_rental_recommendations"}:
                     structured_events, streamed_listings, _, _ = _extract_listing_events(
-                        [streamed_message], streamed_listings
+                        [streamed_message], streamed_listings, criteria=criteria,
                     )
                     for event_name, event_data in structured_events:
                         event_key = _public_event_key(event_name, event_data)

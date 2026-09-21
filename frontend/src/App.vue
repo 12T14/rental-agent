@@ -112,7 +112,8 @@
           <MapPanel
             compact
             :target="target"
-            :listings="displayListings"
+            :listings="allCandidateListings"
+            :list-page-size="listingDisplayLimit"
             :place-candidates="placeCandidates"
             :selected-id="selectedListingId"
             :selected-place-ref="selectedPlaceRef"
@@ -121,7 +122,7 @@
             :search-active="searchActive"
             :search-running="listingSearchRunning"
             :search-summary="searchSummary"
-            :listing-total-count="eligibleListings.length"
+            :listing-total-count="allCandidateListings.length"
             :listing-remaining-count="remainingListingCount"
             @select="selectListing"
             @select-place="selectPlaceCandidate"
@@ -137,11 +138,12 @@
       <aside v-if="selectedListing" class="detail-drawer">
         <div class="drawer-backdrop" @click="selectedListingId = null"></div>
         <div class="drawer-panel">
-          <div class="drawer-header"><div><span class="drawer-kicker">房源概览</span><h2>{{ selectedListing.title }}</h2></div><button class="close-button" type="button" @click="selectedListingId = null">×</button></div>
+          <div class="drawer-header"><div><span class="drawer-kicker">房源 {{ listingNumberLabel(selectedListing) }}</span><h2>{{ selectedListing.title }}</h2></div><button class="close-button" type="button" @click="selectedListingId = null">×</button></div>
+          <div v-if="isAgentRecommended(selectedListing)" class="drawer-block recommendation-summary"><span class="drawer-label">{{ recommendationLabel(selectedListing) }}</span><p>{{ selectedListing.recommendation.reason }}</p><small v-if="selectedListing.recommendation.caveat">注意：{{ selectedListing.recommendation.caveat }}</small></div>
           <div class="drawer-price"><b>{{ selectedListing.rent === null ? '租金未说明' : `¥${selectedListing.rent}` }}</b><span v-if="selectedListing.rent !== null">/月</span><span class="verified-chip">{{ selectedListing.offline ? '离线夹具' : '公开候选' }}</span></div>
           <div class="drawer-grid"><div><span>户型</span><strong>{{ selectedListing.room }}</strong></div><div><span>面积</span><strong>{{ selectedListing.area === null ? '未说明' : `${selectedListing.area}㎡` }}</strong></div><div><span>距离目标</span><strong>{{ formatListingDistance(selectedListing) }}</strong></div><div><span>通勤参考</span><strong>{{ formatListingCommute(selectedListing) }}</strong></div></div>
           <div class="drawer-block"><span class="drawer-label">位置</span><p>{{ listingAddressLabel(selectedListing) }}</p><small :class="selectedListing.locationStatus === 'verified' ? 'verified-text' : 'warning-text'">{{ listingLocationNotice(selectedListing) }}</small></div>
-          <div class="drawer-block"><span class="drawer-label">来源与状态</span><div class="source-row"><span class="source-dot" :class="selectedListing.platformKey"></span>{{ selectedListing.platform }} · {{ selectedListing.updated }}</div></div>
+          <div class="drawer-block"><span class="drawer-label">来源与状态</span><div class="source-row"><span class="source-dot" :class="selectedListing.platformKey"></span>{{ selectedListing.platform }} · {{ detailStatusLabel(selectedListing) }} · {{ selectedListing.updated }}</div></div>
           <div v-if="detailFactEntries(selectedListing.detailFacts).length" class="drawer-block"><span class="drawer-label">详情页明确条件</span><div class="detail-facts"><div v-for="fact in detailFactEntries(selectedListing.detailFacts)" :key="fact.key"><span>{{ fact.label }}</span><strong>{{ fact.value }}</strong></div></div></div>
           <div class="drawer-block ranking-block"><span class="drawer-label">条件判断</span><p class="filter-result" :class="selectedListing.filterStatus">{{ filterStatusLabel(selectedListing) }}</p><small v-if="selectedListing.filterReasons?.length">{{ selectedListing.filterReasons.join('；') }}</small><small v-if="selectedListing.rankingExplanation">{{ selectedListing.rankingExplanation }}</small></div>
           <div class="drawer-tags"><span v-for="tag in selectedListing.tags" :key="tag">{{ tag }}</span></div>
@@ -183,17 +185,20 @@ import {
   applyDetailResults,
   applyListingEnrichment,
   defaultPlatformStatuses,
+  detailStatusLabel,
   detailFactEntries,
   filterStatusLabel,
   formatListingCommute,
   formatListingDistance,
+  isAgentRecommended,
   listingAddressLabel,
   listingLocationNotice,
   listingPlaceLabel,
+  listingNumberLabel,
+  recommendationLabel,
   mergeSearchSummary,
   normalizeListings,
-  normalizePlatformStatuses,
-  visibleListings
+  normalizePlatformStatuses
 } from './services/listingState.js'
 
 const target = ref({ name: '', address: '输入地点后选择一个定位结果', city: '', lng: null, lat: null, confidence: '待确认' })
@@ -242,9 +247,11 @@ const selectedListing = computed(() => listings.value.find(item => item.id === s
 const savedListings = computed(() => listings.value.filter(item => item.saved))
 const activeConversation = computed(() => conversations.value.find(item => item.id === activeHistory.value))
 const sessionTitle = computed(() => activeConversation.value?.title || '新建会话')
-const eligibleListings = computed(() => searchActive.value ? visibleListings(listings.value) : [])
-const displayListings = computed(() => eligibleListings.value.slice(0, listingDisplayLimit.value))
-const remainingListingCount = computed(() => Math.max(0, eligibleListings.value.length - displayListings.value.length))
+// The map always receives the complete bounded pool. Pagination affects only
+// the scrollable list, never which houses exist on the map.
+const allCandidateListings = computed(() => searchActive.value ? listings.value : [])
+const displayListings = computed(() => allCandidateListings.value.slice(0, listingDisplayLimit.value))
+const remainingListingCount = computed(() => Math.max(0, allCandidateListings.value.length - displayListings.value.length))
 
 function resetListingDisplayLimit() {
   listingDisplayLimit.value = LISTING_PAGE_SIZE
@@ -252,7 +259,7 @@ function resetListingDisplayLimit() {
 
 function loadMoreListings() {
   listingDisplayLimit.value = Math.min(
-    eligibleListings.value.length,
+    allCandidateListings.value.length,
     listingDisplayLimit.value + LISTING_PAGE_SIZE
   )
 }
@@ -273,7 +280,8 @@ function receivePlatformStatus(data) {
 }
 function receiveListings(data) {
   resetListingDisplayLimit()
-  listings.value = normalizeListings(data, listings.value)
+  const savedIds = new Set(listings.value.filter(item => item.saved).map(item => item.id))
+  listings.value = normalizeListings(data).map(item => ({ ...item, saved: item.saved || savedIds.has(item.id) }))
   searchActive.value = true
   searchSummary.value = mergeSearchSummary(searchSummary.value, data)
 }
@@ -297,6 +305,15 @@ function receiveListingEnrichment(data) {
   searchActive.value = true
   const mapTarget = data?.target
   if (mapTarget && typeof mapTarget === 'object' && (mapTarget.name || mapTarget.lng !== undefined)) {
+    const targetRef = typeof mapTarget.candidate_ref === 'string'
+      ? mapTarget.candidate_ref.trim()
+      : ''
+    if (targetRef && placeCandidates.value.some(candidate => candidate.candidate_ref === targetRef)) {
+      selectedPlaceRef.value = targetRef
+      confirmedPlaceRef.value = targetRef
+      pendingPlaceSelectionRef.value = ''
+      pendingPlaceSelection.value = null
+    }
     target.value = {
       ...target.value,
       name: mapTarget.name || target.value.name,
@@ -306,7 +323,7 @@ function receiveListingEnrichment(data) {
       adcode: mapTarget.adcode || target.value.adcode,
       lng: mapTarget.lng ?? target.value.lng,
       lat: mapTarget.lat ?? target.value.lat,
-      candidate_ref: mapTarget.candidate_ref || target.value.candidate_ref || '',
+      candidate_ref: targetRef || target.value.candidate_ref || '',
       confidence: target.value.confidence === '待确认'
         ? (mapTarget.location_confidence || target.value.confidence)
         : target.value.confidence
@@ -326,7 +343,8 @@ const toolLabels = {
   batch_fetch_listing_details: '读取房源详情',
   human_verify_rental_platform: '等待平台人工验证',
   playwright_browser: '查看公开网页',
-  request_rental_preferences: '等待补充找房条件'
+  request_rental_preferences: '等待补充找房条件',
+  publish_rental_recommendations: '整理推荐房源'
 }
 function toolLabel(name) {
   return toolLabels[name] || '处理找房任务'
@@ -598,6 +616,8 @@ async function handleChatMessage(text, { recover = false } = {}) {
           receiveListingDetails(data)
         } else if (event === 'listing_update') {
           receiveListingUpdate(data)
+        } else if (event === 'listing_recommendations') {
+          listings.value = normalizeListings(data, listings.value)
         } else if (event === 'listing_enrichment') {
           receiveListingEnrichment(data)
         } else if (event === 'assistant' && data?.text) {

@@ -14,7 +14,7 @@ from .batch_detail_tool import batch_fetch_listing_details, fetch_detail_batch
 from .candidate_search import search_rental_candidates
 from .config import SKILL_PATH, build_rental_agent
 from .human_verification_tool import human_verify_rental_platform
-from .location_tool import resolve_target_place
+from .location_tool import confirm_target_place, resolve_target_place
 from .playwright_browser_tool import playwright_browser
 
 if sys.platform == "win32":
@@ -55,6 +55,7 @@ def agent_tools():
     """按稳定顺序返回向租房 Agent 暴露的固定工具。"""
     return [
         resolve_target_place,
+        confirm_target_place,
         search_rental_candidates,
         batch_fetch_listing_details,
         human_verify_rental_platform,

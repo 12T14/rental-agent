@@ -353,6 +353,37 @@ class SharedVerificationTests(unittest.TestCase):
         self.assertEqual(result[1:], (FANG_REGION, 200))
         browser.close.assert_called_once()
 
+    def test_timeout_keeps_usable_cards_without_retry(self):
+        from playwright.sync_api import TimeoutError
+        page = MagicMock()
+        page.goto.side_effect = TimeoutError("slow DOM")
+        page.url = FANG_REGION
+        page.content.return_value = fang_card()
+        html, final, status = platform_pages._navigate_public_page(page, FANG_REGION)
+        self.assertEqual((final, status), (FANG_REGION, 200))
+        self.assertIn("新城", html)
+        page.goto.assert_called_once()
+
+    def test_timeout_retries_once_but_never_retries_a_challenge(self):
+        from playwright.sync_api import Error, TimeoutError
+        page = MagicMock()
+        page.goto.side_effect = [Error("net::ERR_TIMED_OUT"), MagicMock(status=200)]
+        page.url = FANG_REGION
+        page.content.side_effect = ["<html></html>", fang_card()]
+        self.assertEqual(platform_pages._navigate_public_page(page, FANG_REGION)[2], 200)
+        self.assertEqual(page.goto.call_count, 2)
+        page = MagicMock()
+        page.goto.side_effect = TimeoutError("slow")
+        page.url = FANG_REGION
+        page.content.return_value = CHALLENGE
+        self.assertEqual(platform_pages._navigate_public_page(page, FANG_REGION)[0], CHALLENGE)
+        page.goto.assert_called_once()
+        page.content.return_value = "<html></html>"
+        page.goto.reset_mock()
+        with self.assertRaises(TimeoutError):
+            platform_pages._navigate_public_page(page, FANG_REGION)
+        self.assertEqual(page.goto.call_count, 2)
+
     def test_shared_verification_timeout_does_not_save_and_closes_browser(self) -> None:
         from playwright import sync_api
 
@@ -368,6 +399,23 @@ class SharedVerificationTests(unittest.TestCase):
         self.assertEqual(result["status"], "error")
         self.assertFalse(result["session_saved"])
         context.storage_state.assert_not_called()
+        browser.close.assert_called_once()
+
+    def test_extensionless_anjuke_detail_verification_recognizes_recovered_detail(self):
+        from playwright import sync_api
+
+        url = "https://cz.zu.anjuke.com/fangyuan/4750903881016325"
+        browser = MagicMock()
+        context = browser.new_context.return_value
+        page = context.new_page.return_value
+        page.url = url
+        page.content.return_value = "<body>" + "公开房源信息 " * 20 + "租金 1000 元/月</body>"
+        with tempfile.TemporaryDirectory() as directory, patch.object(sync_api, "sync_playwright"), patch.object(
+            scrape_58, "_launch_browser", return_value=browser
+        ), patch.object(platform_pages.time, "monotonic", side_effect=[0, 1, 301]):
+            result = platform_pages.create_platform_session("anjuke", url, str(Path(directory) / "state.json"))
+        self.assertEqual(result["status"], "ok")
+        context.storage_state.assert_called_once()
         browser.close.assert_called_once()
 
     def test_shared_verification_exception_closes_browser_without_leaking_challenge_url(self) -> None:

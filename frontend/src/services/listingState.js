@@ -311,6 +311,11 @@ export function normalizeListing(raw, index = 0, previous = null) {
         || (locationStatus === 'verified' ? '通勤待计算' : '位置待核验')
   return {
     id,
+    displayNumber: listingNumber(raw.displayNumber ?? raw.display_number)
+      ?? listingNumber(previous?.displayNumber),
+    recommendation: filterStatus === 'excluded' ? null
+      : normalizeRecommendation(Object.prototype.hasOwnProperty.call(raw, 'recommendation')
+        ? raw.recommendation : previous?.recommendation),
     platformKey: definition?.key || asText(raw.platformKey ?? raw.platform_key, 'other', 50),
     platform: definition?.name || asText(raw.platform, '其他平台', 100),
     title,
@@ -400,12 +405,64 @@ export function normalizeListings(payload, previous = []) {
   const source = Array.isArray(payload?.listings) ? payload.listings : []
   const previousById = new Map((Array.isArray(previous) ? previous : []).map(item => [item.id, item]))
   const seen = new Set()
-  return source.flatMap((raw, index) => {
+  const items = source.flatMap((raw, index) => {
     const item = normalizeListing(raw, index, previousById.get(raw?.id ?? raw?.listing_id))
     if (!item || seen.has(item.id)) return []
     seen.add(item.id)
     return [item]
   })
+  // Old sessions receive a number once. Sorting or partial enrichment must not
+  // renumber an existing identity; new searches normalize without previous data.
+  const used = new Set()
+  for (const item of items) {
+    if (item.displayNumber && !used.has(item.displayNumber)) used.add(item.displayNumber)
+    else item.displayNumber = null
+  }
+  let next = 1
+  for (const item of items) {
+    if (item.displayNumber) continue
+    while (used.has(next)) next += 1
+    item.displayNumber = next
+    used.add(next)
+  }
+  return items
+}
+
+function listingNumber(value) {
+  return Number.isInteger(value) && value > 0 && value <= 60 ? value : null
+}
+
+function normalizeRecommendation(value) {
+  if (!value || typeof value !== 'object') return null
+  const reason = asText(value.reason, '', 500)
+  return reason ? { reason, caveat: asText(value.caveat, '', 500) } : null
+}
+
+export function isFilterPassed(listing) {
+  return listing?.filterStatus === 'passed'
+}
+
+export function isAgentRecommended(listing) {
+  return isFilterPassed(listing)
+    && listing?.detailStatus === 'ok'
+    && Boolean(listing?.recommendation)
+}
+
+export function listingNumberLabel(listing) {
+  return listingNumber(listing?.displayNumber) ? `#${listing.displayNumber}` : '未编号'
+}
+
+export function recommendationLabel(listing) {
+  return isAgentRecommended(listing) ? 'Agent 推荐' : ''
+}
+
+export function detailStatusLabel(listing) {
+  if (listing?.detailStatus === 'ok') return '详情已读取'
+  if (listing?.detailStatus === 'blocked' || listing?.detailStatus === 'skipped_after_block') return '详情被平台拦截'
+  if (listing?.detailStatus === 'rejected_redirect' || listing?.detailStatus === 'redirect_not_followed') return '详情被重定向'
+  if (listing?.detailStatus === 'error') return '详情读取失败'
+  if (listing?.detailStatus === 'source_list' || listing?.detailStatus === 'not_requested') return '没有详情页'
+  return '详情待核验'
 }
 
 export function normalizeSearchSummary(payload) {

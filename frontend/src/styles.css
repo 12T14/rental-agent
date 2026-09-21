@@ -197,6 +197,9 @@ input[type='range'] { width: 100%; height: 4px; margin: 14px 0 7px; accent-color
 .legend-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--teal); }
 .legend-dot.target { background: #285f58; }
 .legend-dot.listing { background: #ef6c3b; }
+.legend-dot.qualified { background: #e0aa2b; }
+.legend-dot.recommended { background: #2f75c9; }
+.legend-dot.detail-pending { border: 2px dashed #e0aa2b; background: transparent; }
 .legend-dot.pending { background: #d48648; }
 .map-attribution { position: absolute; z-index: 3; right: 9px; bottom: 7px; padding: 2px 4px; color: #738984; background: rgba(255,255,255,.78); font-size: 7px; pointer-events: none; }
 .place-candidates { border-bottom: 1px solid var(--line); background: #fbfdfc; }
@@ -254,6 +257,28 @@ input[type='range'] { width: 100%; height: 4px; margin: 14px 0 7px; accent-color
 .listing-load-more { display: block; width: 100%; min-height: 34px; margin: 4px 0 2px; border: 1px solid #b9d5ce; border-radius: 6px; color: #356f64; background: #eef7f4; font-size: 10px; font-weight: 700; cursor: pointer; }
 .listing-load-more:hover { border-color: #78ad9f; background: #e3f1ed; }
 .listing-load-more:focus-visible { outline: 2px solid #73a99b; outline-offset: 2px; }
+.candidate-pool-note { margin: 0; padding: 0 13px 10px; color: #6b817b; font-size: 10px; line-height: 1.65; }
+.map-list-rank small { font-size: 8px; font-weight: 400; }
+.map-list-row.recommended { border-color: #78a9df; background: #f7fbff; }
+.map-list-row.qualified { border-color: #dfc06c; background: #fffdf5; }
+.map-list-row.detailPending { border-style: dashed; }
+.map-list-row.excluded { border-style: dashed; background: #f4f5f4; }
+.recommendation-chip { align-self: flex-start; color: #225b9c; font-size: 9px; font-style: normal; }
+.detail-status-line { color: #8b6a39 !important; }
+.amap-place-marker.amap-listing-marker.is-recommended { background: #2f75c9; box-shadow: 0 0 0 3px #d8eaff; }
+.amap-place-marker.amap-listing-marker.is-qualified { background: #e0aa2b; box-shadow: 0 0 0 3px #fff0b8; }
+.amap-place-marker.amap-listing-marker.is-detail-pending { border-style: dashed; }
+.amap-place-marker.amap-listing-marker.is-excluded { background: #788681; }
+.amap-place-marker.amap-listing-marker.is-cluster { width: 46px; height: 34px; border-radius: 17px; }
+.map-cluster-list { padding: 10px 13px; border-bottom: 1px solid var(--line); background: #fffaf0; }
+.cluster-heading { display: flex; align-items: center; justify-content: space-between; color: #655323; font-size: 12px; }
+.cluster-heading button { border: 0; background: transparent; font-size: 18px; }
+.map-cluster-list > small { color: #8b7c5c; font-size: 10px; }
+.map-cluster-list { max-height: 230px; overflow: auto; }
+.map-cluster-list > button { display: flex; gap: 6px; align-items: center; width: 100%; margin-top: 6px; padding: 8px; border: 1px solid #e5d9ba; border-radius: 5px; background: #fff; color: #465e50; font-size: 10px; text-align: left; }
+.map-cluster-list > button span { margin-left: auto; white-space: nowrap; }
+.map-cluster-list em { color: #886312; font-size: 9px; font-style: normal; }
+.recommendation-summary { background: #f1f7ff; padding: 12px; border-radius: 8px; }
 .context-listing-empty { display: flex; min-height: 112px; align-items: center; justify-content: center; padding: 18px; color: #718680; text-align: center; flex-direction: column; gap: 5px; }
 .context-listing-empty > span { width: 16px; height: 16px; border: 2px solid #c8ded7; border-top-color: transparent; border-radius: 50%; }
 .context-listing-empty:not(.loading) > span { border: 0; }
@@ -280,6 +305,9 @@ input[type='range'] { width: 100%; height: 4px; margin: 14px 0 7px; accent-color
 .listing-scroll { overflow: auto; padding: 0 10px 5px; }
 .listing-card { position: relative; margin-bottom: 9px; padding: 13px 12px 11px; border: 1px solid #e0e8e5; border-radius: 7px; background: #fff; cursor: pointer; transition: border-color .2s, box-shadow .2s, transform .2s; }
 .listing-card:hover, .listing-card.selected { border-color: #94c6bb; box-shadow: 0 7px 17px rgba(34,91,82,.09); transform: translateY(-1px); }
+.listing-card.qualified { border-color: #dfc06c; background: #fffdf5; }
+.listing-card.agent-recommended { border-color: #78a9df; background: #f7fbff; box-shadow: 0 7px 17px rgba(47,117,201,.12); }
+.listing-card.detail-pending { border-style: dashed; }
 .listing-card.selected { border-left: 3px solid var(--teal); padding-left: 10px; }
 .listing-card-top { display: flex; align-items: center; gap: 6px; }
 .source-badge { padding: 4px 6px; border-radius: 3px; color: #fff; font-size: 8px; font-weight: 700; }
@@ -303,6 +331,7 @@ input[type='range'] { width: 100%; height: 4px; margin: 14px 0 7px; accent-color
 .listing-status-chip { padding: 3px 5px; border-radius: 3px; color: #8b6a39; background: var(--amber-soft); }
 .listing-status-chip.passed { color: #3d7967; background: var(--teal-soft); }
 .listing-status-chip.excluded { color: #a8584e; background: var(--red-soft); }
+.listing-status-chip.agent-recommended { color: #225b9c; background: #e5f0ff; }
 .listing-reason { overflow: hidden; margin: 6px 0 0; color: #84938f; font-size: 8px; line-height: 1.45; text-overflow: ellipsis; white-space: nowrap; }
 .listing-card-footer { display: flex; align-items: center; justify-content: space-between; margin-top: 10px; padding-top: 9px; border-top: 1px solid #edf1ef; color: #93a19d; font-size: 9px; }
 .listing-card-footer button, .listing-footer button, .assistant-footer button { border: 0; color: var(--teal); background: transparent; font-size: 9px; font-weight: 700; }
@@ -527,6 +556,39 @@ input[type='range'] { width: 100%; height: 4px; margin: 14px 0 7px; accent-color
 .saved-item small { color: var(--teal); white-space: nowrap; }
 .saved-heart { color: #d36e57; }
 @keyframes typing { 0%, 60%, 100% { opacity: .35; transform: translateY(0); } 30% { opacity: 1; transform: translateY(-2px); } }
+
+/* 可读性与长回复布局：让聊天正文使用面板的有效宽度。 */
+.conversation-layout { grid-template-columns: minmax(0, 1fr) 330px; }
+.chat-shell .brand-caption, .chat-shell .panel-kicker { font-size: 10px; }
+.chat-shell .section-label { font-size: 11px; }
+.chat-shell .history-copy strong { font-size: 13px; }
+.chat-shell .history-copy small, .chat-shell .privacy-action, .chat-shell .sidebar-foot { font-size: 11px; }
+.chat-shell .breadcrumb { font-size: 13px; }
+.chat-shell .local-badge { font-size: 12px; }
+.message-row, .typing-row { max-width: 1120px; }
+.message-bubble { font-size: 13px; line-height: 1.72; }
+.message-name { font-size: 10px; }
+.activity-card { width: min(820px, 100%); }
+.activity-title strong { font-size: 11px; }
+.activity-title small { font-size: 10px; }
+.activity-platform > span:not(.activity-status) { font-size: 10px; }
+.activity-platform small { font-size: 9px; }
+.verification-button { font-size: 10px; }
+.chat-composer textarea { font-size: 12px; line-height: 1.6; }
+.composer-note { font-size: 9px; }
+.context-heading h2 { font-size: 16px; }
+.context-heading p, .context-live { font-size: 10px; }
+.context-column .map-toolbar h2 { font-size: 14px; }
+.context-column .map-toolbar p { font-size: 9px; }
+.context-column .map-legend { font-size: 8px; }
+.context-column .map-footer { font-size: 9px; }
+.context-results-heading strong { font-size: 11px; }
+.context-results-heading > span { font-size: 10px; }
+.candidate-pool-note { font-size: 11px; }
+.context-listing-list .map-list-row { font-size: 11px; }
+.context-listing-list .map-list-name strong { font-size: 12px; }
+.context-listing-list .map-list-name small { font-size: 10px; }
+.context-listing-list .map-list-rent { font-size: 13px; }
 
 @media (max-width: 1120px) {
   .chat-shell .sidebar { width: 205px; flex-basis: 205px; }

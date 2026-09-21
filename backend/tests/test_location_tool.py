@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import os
+import json
 import unittest
 from unittest.mock import patch
 
 from agent_core.candidate_search import _compact
-from agent_core.location_tool import AmapPlaceProvider, _base_result
+from agent_core.location_tool import AmapPlaceProvider, _base_result, confirm_target_place
 
 
 class LocationToolTests(unittest.TestCase):
@@ -32,6 +33,14 @@ class LocationToolTests(unittest.TestCase):
             with self.subTest(status=status):
                 result = _base_result(query="地点", status=status, message="请确认")
                 self.assertTrue(result["requires_user_confirmation"])
+
+    def test_confirm_target_place_only_accepts_a_safe_candidate_reference(self) -> None:
+        valid = json.loads(confirm_target_place.invoke({"candidate_ref": "pc_test"}))
+        invalid = json.loads(confirm_target_place.invoke({"candidate_ref": "pc test"}))
+
+        self.assertEqual(valid["status"], "confirmed")
+        self.assertEqual(valid["candidate_ref"], "pc_test")
+        self.assertEqual(invalid["status"], "invalid_selection")
 
 
 if __name__ == "__main__":

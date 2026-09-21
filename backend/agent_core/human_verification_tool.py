@@ -204,9 +204,13 @@ def human_verify_rental_platform(
                 "本次不弹出验证窗口。"
             )
         else:
-            from .batch_detail_tool import consume_detail_verification_request
+            from .batch_detail_tool import (
+                consume_detail_verification_request,
+                detail_verification_context,
+            )
 
             authorized = bool(target_url) and consume_detail_verification_request(normalized, target_url)
+            detail_context = detail_verification_context(normalized, target_url) if authorized else None
             missing_message = (
                 f"未发现与该 URL 匹配的 {PLATFORM_NAMES[normalized]} 详情页验证授权；"
                 "详情验证只能由刚发生的拦截触发且只能消费一次。"
@@ -239,8 +243,13 @@ def human_verify_rental_platform(
             target_url,
         )
         result["phase"] = normalized_phase
+        if normalized_phase == "detail" and result.get("status") == "ok" and detail_context:
+            result["retry_urls"] = detail_context["retry_urls"]
+            result["continuation_urls"] = detail_context["continuation_urls"]
+            result["continuation_count"] = len(detail_context["continuation_urls"])
         result["next_step"] = (
-            "请只重试详情批次授权结果中的单条 retry_urls 一次；再次被拦就停止。"
+            "请先把 retry_urls 原样交给详情工具重试一次；若这次成功，再把 continuation_urls "
+            "交给详情工具继续读取一次。继续读取再次触发验证时立即停止，不要循环弹窗。"
             if result.get("status") == "ok" and normalized_phase == "detail"
             else f"请用相同城市、区域和关键词重试刚才被拦截的 {PLATFORM_NAMES[normalized]} 搜索一次。"
             if result.get("status") == "ok"

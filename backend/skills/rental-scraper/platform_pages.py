@@ -108,7 +108,7 @@ def create_platform_session(platform: str, url: str, session_file: str, wait_sec
         return result | {"status": "rejected", "message": "验证入口必须属于对应平台的 HTTPS 域名。"}
     path = urlparse(url).path.rstrip("/")
     phase = "detail" if re.search(r"/(?:chuzu|zufang|hezu)/[^/]+\.(?:htm|html|shtml)$", path) or (
-        platform == "anjuke" and re.search(r"/fangyuan/[^/]+\.(?:html|shtml)$", path)
+        platform == "anjuke" and re.search(r"/fangyuan/(?:\d+|[^/]+\.(?:html|shtml))$", path)
     ) else "search"
     target = Path(session_file).resolve()
     try:
@@ -148,9 +148,37 @@ def create_platform_session(platform: str, url: str, session_file: str, wait_sec
         return result | {"message": "启动或等待人工验证失败，未保存会话；请检查浏览器和网络。"}
 
 
+def _navigate_public_page(page, url: str) -> tuple[str, str, int]:
+    """At most one timeout recovery; never retry a challenge or other errors."""
+    from playwright.sync_api import Error, TimeoutError as PlaywrightTimeoutError
+
+    for attempt in range(2):
+        try:
+            response = page.goto(url, wait_until="domcontentloaded", timeout=45_000)
+            page.wait_for_timeout(3_000)
+            return page.content(), page.url, response.status if response is not None else 200
+        except Error as exc:
+            if not isinstance(exc, PlaywrightTimeoutError) and "ERR_TIMED_OUT" not in str(exc):
+                raise
+            try:
+                html, final_url = page.content(), page.url
+            except Error:
+                html, final_url = "", ""
+            if is_verification_page(html, final_url):
+                return html, final_url, 200
+            platform = next((key for key in PLATFORM_SUFFIXES if allowed_platform_url(key, url)), "")
+            # domcontentloaded may time out while usable cards are already present.
+            if platform and urlparse(final_url).path.rstrip("/") == urlparse(url).path.rstrip("/") and verification_ready(
+                platform, html, final_url, expected_city=platform_city(url)
+            ):
+                return html, final_url, 200
+            if attempt:
+                raise
+
+
 def read_public_page(url: str, session_file: str | None = None, *, delay_seconds: float = 8.0
                      ) -> tuple[str, str, int]:
-    """Read once in the same browser profile used by human verification."""
+    """Read with the verified profile and bounded timeout recovery."""
     from playwright.sync_api import sync_playwright
     from scrape_58 import _launch_browser
 
@@ -165,9 +193,7 @@ def read_public_page(url: str, session_file: str | None = None, *, delay_seconds
                     kwargs["storage_state"] = session_file
                 context = browser.new_context(**kwargs)
                 page = context.new_page()
-                response = page.goto(url, wait_until="domcontentloaded", timeout=45_000)
-                page.wait_for_timeout(3_000)
-                return page.content(), page.url, response.status if response is not None else 200
+                return _navigate_public_page(page, url)
             finally:
                 browser.close()
     finally:

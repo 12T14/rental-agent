@@ -27,11 +27,16 @@
     </div>
 
     <div v-else-if="sortedListings.length" class="listing-scroll">
-      <article
+        <article
         v-for="listing in sortedListings"
         :key="listing.id"
         class="listing-card"
-        :class="{ selected: selectedId === listing.id }"
+        :class="{
+          selected: selectedId === listing.id,
+          'agent-recommended': isAgentRecommended(listing),
+          qualified: isFilterPassed(listing) && !isAgentRecommended(listing),
+          'detail-pending': isFilterPassed(listing) && listing.detailStatus !== 'ok'
+        }"
         @click="emit('select', listing.id)"
       >
         <div class="listing-card-top">
@@ -46,9 +51,14 @@
            <div class="distance-info" :class="{ unverified: listing.locationStatus !== 'verified' }"><span>{{ listing.locationStatus === 'verified' ? '↗' : '⌖' }}</span>{{ formatListingDistance(listing) }} · {{ formatListingCommute(listing) }}</div>
          </div>
          <div class="tag-row"><span v-for="tag in listing.tags.slice(0, 3)" :key="tag">{{ tag }}</span></div>
-         <div class="listing-status-row"><span class="listing-status-chip" :class="listing.filterStatus">{{ filterStatusLabel(listing) }}</span><span>{{ locationStatusLabel(listing) }}</span></div>
+         <div class="listing-status-row">
+           <span v-if="isAgentRecommended(listing)" class="listing-status-chip agent-recommended">Agent 推荐</span>
+           <span class="listing-status-chip" :class="listing.filterStatus">{{ filterStatusLabel(listing) }}</span>
+           <span>{{ detailStatusLabel(listing) }}</span>
+           <span>{{ locationStatusLabel(listing) }}</span>
+         </div>
          <p v-if="listing.filterReasons?.length || listing.rankingReasons?.length" class="listing-reason">{{ listing.filterReasons?.[0] || listing.rankingReasons?.[0] }}</p>
-         <div class="listing-card-footer"><span>{{ listing.detailStatus === 'ok' ? '详情已读取' : (listingHasAddress(listing) ? '列表地址待核验' : '平台未提供地址') }}</span><button type="button" @click.stop="emit('open-detail', listing)">查看概览 <span>→</span></button></div>
+         <div class="listing-card-footer"><span>{{ detailStatusLabel(listing) }}{{ listing.detailStatus === 'ok' ? '' : (listingHasAddress(listing) ? ' · 列表地址待核验' : ' · 平台未提供地址') }}</span><button type="button" @click.stop="emit('open-detail', listing)">查看概览 <span>→</span></button></div>
       </article>
     </div>
 
@@ -64,6 +74,9 @@ import {
   filterStatusLabel,
   formatListingCommute,
   formatListingDistance,
+  detailStatusLabel,
+  isAgentRecommended,
+  isFilterPassed,
   listingHasAddress,
   listingPlaceLabel,
   locationStatusLabel

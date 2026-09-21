@@ -750,11 +750,35 @@ def resolve_target_place(query: str, city_hint: str = "", limit: int = 5) -> str
     return json.dumps(result, ensure_ascii=False)
 
 
+@tool
+def confirm_target_place(candidate_ref: str) -> str:
+    """确认当前地点候选中的一个标准化地点。
+
+    Agent 应根据用户的自然语言选择，从最近一次 ``resolve_target_place`` 返回的
+    candidates 中找到对应的 ``candidate_ref`` 后调用本工具。工具不重新搜索地点，
+    运行时会把该引用绑定回当前会话候选并校验它是否有效。
+    """
+
+    reference = (candidate_ref or "").strip()
+    if not reference or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", reference):
+        return json.dumps({
+            "status": "invalid_selection",
+            "candidate_ref": "",
+            "message": "候选引用无效；请使用最近一次地点解析结果中的 candidate_ref。",
+        }, ensure_ascii=False)
+    return json.dumps({
+        "status": "confirmed",
+        "candidate_ref": reference,
+        "message": "已提交地点候选确认，运行时将校验它是否属于当前候选集。",
+    }, ensure_ascii=False)
+
+
 __all__ = [
     "AmapPlaceProvider",
     "FakePlaceProvider",
     "PlaceCandidate",
     "PlaceProvider",
     "PlaceProviderError",
+    "confirm_target_place",
     "resolve_target_place",
 ]

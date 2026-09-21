@@ -31,17 +31,30 @@
       </div>
 
       <div v-if="mapState === 'ready'" class="map-legend">
-        <span><i class="legend-dot target"></i>{{ searchActive ? (targetLocated ? '目标地点' : '房源位置') : '地点候选' }}</span>
-        <span v-if="searchActive && targetLocated"><i class="legend-dot listing"></i>房源位置</span>
+        <span v-if="!searchActive || targetLocated"><i class="legend-dot target"></i>{{ searchActive ? '目标地点' : '地点候选' }}</span>
+        <span v-if="searchActive"><i class="legend-dot qualified"></i>通过初筛</span>
+        <span v-if="searchActive"><i class="legend-dot recommended"></i>Agent 推荐</span>
+        <span v-if="searchActive"><i class="legend-dot detail-pending"></i>详情待核验</span>
         <span v-else><i class="legend-dot pending"></i>当前查看</span>
       </div>
       <div v-if="mapState === 'ready'" class="map-attribution">高德地图 JSAPI</div>
     </div>
 
+    <div v-if="activeClusterListings.length" class="map-cluster-list" aria-live="polite">
+      <div class="cluster-heading"><strong>此处聚合 {{ activeClusterListings.length }} 套房源</strong><button type="button" aria-label="关闭聚合房源" @click="activeClusterIds = []">×</button></div>
+      <small>位置相近不代表同一套房；可放大地图，或直接查看：</small>
+      <button v-for="listing in activeClusterListings" :key="listing.id" type="button" @click="selectListing(listing.id)">
+        <b>{{ listingNumberLabel(listing) }}</b> {{ listingPlaceLabel(listing) }}
+        <span>{{ listing.rent === null ? '租金未说明' : `¥${listing.rent}/月` }}</span>
+        <em v-if="isAgentRecommended(listing)">Agent 推荐</em>
+        <em v-else-if="isFilterPassed(listing)">通过初筛 · {{ detailStatusLabel(listing) }}</em>
+      </button>
+    </div>
+
     <div v-show="viewMode === 'list'" class="map-list-view">
-      <button v-for="listing in listings" :key="listing.id" type="button" class="map-list-row" :class="{ selected: selectedId === listing.id }" @click="selectListing(listing.id)">
-        <span class="map-list-rank">{{ listing.platform }}</span>
-        <span class="map-list-name"><strong>{{ listingTitleLabel(listing) }}</strong><small>{{ listingPlaceLabel(listing) }} · {{ listing.room }} · {{ formatListingDistance(listing) }} · {{ formatListingCommute(listing) }}</small></span>
+      <button v-for="listing in pagedListings" :key="listing.id" type="button" class="map-list-row" :class="listingRowClasses(listing)" @click="selectListing(listing.id)">
+        <span class="map-list-rank">{{ listingNumberLabel(listing) }}<small>{{ listing.platform }}</small></span>
+        <span class="map-list-name"><strong>{{ listingTitleLabel(listing) }}</strong><small>{{ listingPlaceLabel(listing) }} · {{ listing.room }} · {{ formatListingDistance(listing) }} · {{ formatListingCommute(listing) }}</small><em v-if="isAgentRecommended(listing)" class="recommendation-chip">{{ recommendationLabel(listing) }}</em><small v-else-if="isFilterPassed(listing)" class="detail-status-line">{{ detailStatusLabel(listing) }}</small><small v-if="listing.filterStatus === 'excluded'">不符合当前硬条件</small></span>
         <strong class="map-list-rent">{{ listing.rent === null ? '租金未说明' : '¥' + listing.rent }}<small v-if="listing.rent !== null">/月</small></strong>
       </button>
       <div v-if="!listings.length" class="map-list-empty">当前条件下没有可展示的房源</div>
@@ -102,27 +115,31 @@
     <div v-if="compact && searchActive" class="context-listing-results" aria-live="polite">
       <div class="context-results-heading">
         <div><strong>{{ listingSectionTitle }}</strong><small>{{ listingStatusText }}</small></div>
-        <span>已显示 {{ listings.length }}/{{ effectiveListingTotal }} 条</span>
+        <span>列表 {{ pagedListings.length }}/{{ effectiveListingTotal }} 套</span>
       </div>
+      <p class="candidate-pool-note">全部候选 {{ effectiveListingTotal }} 套 · 初筛通过 {{ qualifiedCount }} 套 · Agent 精选 {{ recommendedCount }} 套 · 待核验 {{ pendingDetailCount }} 套<span v-if="excludedCount"> · {{ excludedCount }} 套不符合硬条件</span>。地图展示所有已定位候选，不受列表分页、详情批次或推荐数量限制；# 为固定房源编号，不是排名。</p>
       <div class="context-listing-list">
         <button
-          v-for="listing in listings"
+          v-for="listing in pagedListings"
           :key="listing.id"
           type="button"
           class="map-list-row"
-          :class="{ selected: selectedId === listing.id }"
+          :class="listingRowClasses(listing)"
           @click="selectListing(listing.id)"
         >
-          <span class="map-list-rank">{{ listing.platform }}</span>
+          <span class="map-list-rank">{{ listingNumberLabel(listing) }}<small>{{ listing.platform }}</small></span>
           <span class="map-list-name">
             <strong>{{ listingTitleLabel(listing) }}</strong>
             <small>{{ listingPlaceLabel(listing) }} · {{ listing.room }} · {{ formatListingDistance(listing) }} · {{ formatListingCommute(listing) }}</small>
+            <em v-if="isAgentRecommended(listing)" class="recommendation-chip">{{ recommendationLabel(listing) }}</em>
+            <small v-else-if="isFilterPassed(listing)" class="detail-status-line">{{ detailStatusLabel(listing) }}</small>
+            <small v-if="listing.filterStatus === 'excluded'">不符合当前硬条件</small>
           </span>
           <strong class="map-list-rent">{{ listing.rent === null ? '租金未说明' : '¥' + listing.rent }}<small v-if="listing.rent !== null">/月</small></strong>
         </button>
         <div v-if="!listings.length" class="context-listing-empty" :class="{ loading: searchRunning }">
           <span></span>
-          <strong>{{ searchRunning ? (targetLocated ? '正在获取附近房源' : '正在获取房源候选') : '当前没有可展示的房源' }}</strong>
+          <strong>{{ searchRunning ? '正在获取房源候选' : '当前没有可展示的房源' }}</strong>
           <small>{{ listingStatusText }}</small>
         </div>
         <button v-if="listingRemainingCount > 0" class="listing-load-more" type="button" @click="emit('load-more')">
@@ -133,7 +150,7 @@
 
     <div class="map-footer">
       <div class="map-summary">
-        <template v-if="searchActive"><strong>{{ listings.length }}</strong>/{{ effectiveListingTotal }} 条房源已显示</template>
+        <template v-if="searchActive">本轮 <strong>{{ effectiveListingTotal }}</strong> 套候选</template>
         <template v-else><strong>{{ placeCandidates.length }}</strong> 个地点候选</template>
         <span>·</span>{{ mapAvailabilityLabel }}
       </div>
@@ -147,11 +164,17 @@ import AMapLoader from '@amap/amap-jsapi-loader'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 
 import { candidateArea, candidateCoordinates } from '../services/placeCandidates.js'
+import { groupListingPoints } from '../services/mapClusters.js'
 import {
+  detailStatusLabel,
   formatListingCommute,
   formatListingDistance,
+  isAgentRecommended,
+  isFilterPassed,
   listingPlaceLabel,
-  listingTitleLabel
+  listingTitleLabel,
+  listingNumberLabel,
+  recommendationLabel
 } from '../services/listingState.js'
 
 const props = defineProps({
@@ -167,7 +190,8 @@ const props = defineProps({
   searchRunning: { type: Boolean, default: false },
   searchSummary: { type: Object, default: null },
   listingTotalCount: { type: Number, default: 0 },
-  listingRemainingCount: { type: Number, default: 0 }
+  listingRemainingCount: { type: Number, default: 0 },
+  listPageSize: { type: Number, default: 20 }
 })
 
 const emit = defineEmits(['select', 'center', 'select-place', 'load-more'])
@@ -181,6 +205,15 @@ const mapConfigured = Boolean(jsapiKey && securityCode)
 let amapApi = null
 let mapMarkers = []
 let disposed = false
+const activeClusterIds = ref([])
+const activeClusterListings = computed(() => props.listings.filter(item => activeClusterIds.value.includes(item.id)))
+const pagedListings = computed(() => props.listings.slice(0, props.listPageSize))
+const recommendedCount = computed(() => props.listings.filter(isAgentRecommended).length)
+const qualifiedCount = computed(() => props.listings.filter(isFilterPassed).length)
+const pendingDetailCount = computed(() => props.listings.filter(item => (
+  isFilterPassed(item) && item.detailStatus !== 'ok'
+)).length)
+const excludedCount = computed(() => props.listings.filter(item => item.filterStatus === 'excluded').length)
 
 const candidatePoints = computed(() => props.placeCandidates.flatMap((candidate, index) => {
   const position = candidateCoordinates(candidate)
@@ -234,7 +267,7 @@ const mapStateMessage = computed(() => ({
 }[mapState.value] || ''))
 const mapAvailabilityLabel = computed(() => {
   if (mapState.value === 'ready' && props.searchActive && props.listings.length) {
-    return `${listingPoints.value.length}/${props.listings.length} 条房源已定位`
+    return `${listingPoints.value.length} 套已定位 · ${props.listings.length - listingPoints.value.length} 套位置待核验`
   }
   if (mapState.value === 'ready') return '地图已就绪'
   if (mapState.value === 'loading') return '地图加载中'
@@ -251,18 +284,16 @@ const placeCandidatesHint = computed(() => {
   }
   return '点击候选填入聊天草稿；也可直接在聊天中回复名称或序号'
 })
-const listingSectionTitle = computed(() => targetLocated.value ? '附近房源' : '房源候选')
+const listingSectionTitle = computed(() => '本轮全部候选')
 const listingStatusText = computed(() => {
   if (props.searchRunning) return 'Agent 正在调用房源搜索工具'
-  if (props.listings.length && listingPoints.value.length < props.listings.length) {
-    return `${listingPoints.value.length} 条已定位，其余房源地址待核验`
-  }
+  if (props.listings.length && listingPoints.value.length < props.listings.length) return '未定位房源保留在列表，不生成猜测坐标'
   if (props.listings.length && !targetLocated.value) return '目标地点未定位，距离未核验'
   if (props.searchSummary?.status === 'failed') return '本轮搜索未完成'
   if (props.searchSummary?.status === 'partial') return '部分平台返回了候选'
   if (props.searchSummary?.status === 'empty') return '本轮搜索没有返回候选'
   if (props.searchSummary?.offline) return '离线夹具结果，仅用于回归验证'
-  return props.listings.length ? 'Agent 已同步公开平台候选' : '等待 Agent 搜索结果'
+  return props.listings.length ? '位置标记不代表推荐或当前可租' : '等待 Agent 搜索结果'
 })
 
 function selectListing(id) {
@@ -271,6 +302,16 @@ function selectListing(id) {
 
 function selectPlace(candidate) {
   emit('select-place', candidate)
+}
+
+function listingRowClasses(listing) {
+  return {
+    selected: props.selectedId === listing.id,
+    recommended: isAgentRecommended(listing),
+    qualified: isFilterPassed(listing) && !isAgentRecommended(listing),
+    detailPending: isFilterPassed(listing) && listing.detailStatus !== 'ok',
+    excluded: listing.filterStatus === 'excluded'
+  }
 }
 
 function markerContent(label, selected = false, confirmed = false, title = '', kind = 'place') {
@@ -299,14 +340,11 @@ function syncMarkers(fitAll = true) {
   if (!mapInstance.value || !amapApi || mapState.value !== 'ready') return
   clearMarkers()
 
-  const points = markerPoints.value
+  const points = markerPoints.value.filter(point => !point.listingOnly)
 
   mapMarkers = points.map(point => {
     const reference = point.candidate.candidate_ref || ''
-    const listingId = point.listingOnly ? point.candidate.id : ''
-    const selected = point.listingOnly
-      ? listingId === props.selectedId
-      : reference ? reference === props.selectedPlaceRef : Boolean(point.targetOnly)
+    const selected = reference ? reference === props.selectedPlaceRef : Boolean(point.targetOnly)
     const confirmed = Boolean(reference && reference === props.confirmedPlaceRef)
     const content = markerContent(
       point.targetOnly ? '⌖' : String(point.index + 1),
@@ -314,17 +352,10 @@ function syncMarkers(fitAll = true) {
       confirmed,
       point.targetOnly
         ? (point.candidate.name || '目标地点')
-        : (point.listingOnly
-          ? `${listingTitleLabel(point.candidate)} · ${listingPlaceLabel(point.candidate)}`
-          : point.candidate.name),
-      point.listingOnly ? 'listing' : (point.targetOnly ? 'target' : 'place')
+        : point.candidate.name,
+      point.targetOnly ? 'target' : 'place'
     )
-    if (point.listingOnly) {
-      content.addEventListener('click', event => {
-        event.stopPropagation()
-        selectListing(point.candidate.id)
-      })
-    } else if (!point.targetOnly) {
+    if (!point.targetOnly) {
       content.addEventListener('click', event => {
         event.stopPropagation()
         selectPlace(point.candidate)
@@ -333,22 +364,61 @@ function syncMarkers(fitAll = true) {
     return new amapApi.Marker({
       position: point.position,
       content,
-      offset: new amapApi.Pixel(-17, -40),
+      offset: new amapApi.Pixel(point.targetOnly ? 8 : -17, -40),
       title: point.candidate.name,
       zIndex: selected ? 120 : 100
     })
   })
 
+  if (props.searchActive) {
+    const groups = groupListingPoints(listingPoints.value, position => mapInstance.value.lngLatToContainer(position))
+    for (const group of groups) {
+      const listing = group.listings[0]
+      const selected = group.listings.some(item => item.id === props.selectedId)
+      const isCluster = group.count > 1
+      const content = markerContent(
+        isCluster ? `${group.count}套` : listingNumberLabel(listing),
+        selected, false,
+        isCluster ? `${group.count} 套房源：${group.listings.map(listingNumberLabel).join('、')}`
+          : `${listingNumberLabel(listing)} ${listingTitleLabel(listing)}`,
+        'listing'
+      )
+      if (isCluster) content.classList.add('is-cluster')
+      if (group.recommended) content.classList.add('is-recommended')
+      else if (group.qualified) content.classList.add('is-qualified')
+      if (group.detailPending) content.classList.add('is-detail-pending')
+      if (group.listings.every(item => item.filterStatus === 'excluded')) content.classList.add('is-excluded')
+      content.addEventListener('click', event => {
+        event.stopPropagation()
+        if (isCluster) activeClusterIds.value = group.listings.map(item => item.id)
+        else selectListing(listing.id)
+      })
+      mapMarkers.push(new amapApi.Marker({
+        position: group.position, content, offset: new amapApi.Pixel(isCluster ? -23 : -17, -40),
+        zIndex: selected ? 140 : group.recommended ? 125 : 110
+      }))
+    }
+  }
   if (!mapMarkers.length) return
   mapInstance.value.add(mapMarkers)
-  if (!fitAll && selectedCandidateMissingCoordinates.value) return
-  if (fitAll && mapMarkers.length > 1) {
-    mapInstance.value.setFitView(mapMarkers, false, [52, 42, 58, 42], 15)
+  if (!fitAll) return
+  // Fit the original positions, not cluster representatives.
+  if (markerPoints.value.length > 1) {
+    const boundsMarkers = markerPoints.value.map(point => new amapApi.Marker({ position: point.position }))
+    try {
+      mapInstance.value.setFitView(boundsMarkers, false, [52, 42, 58, 42], 15)
+    } finally {
+      // These markers are only bounds inputs, never added to the map. Release
+      // any SDK-side overlay reference immediately after setFitView returns.
+      for (const marker of boundsMarkers) marker.setMap?.(null)
+    }
   } else {
-    const center = preferredCoordinates.value || points[0].position
+    const center = preferredCoordinates.value || markerPoints.value[0].position
     mapInstance.value.setZoomAndCenter(15, center)
   }
 }
+
+function redrawMarkers() { syncMarkers(false) }
 
 async function initializeMap() {
   if (!mapConfigured || !mapContainer.value) return
@@ -374,6 +444,7 @@ async function initializeMap() {
       resizeEnable: true
     })
     mapState.value = 'ready'
+    for (const event of ['zoomend', 'moveend', 'resize', 'rotateend']) mapInstance.value.on(event, redrawMarkers)
     syncMarkers(true)
   } catch {
     if (!disposed) mapState.value = 'error'
@@ -388,7 +459,10 @@ function centerTarget() {
 }
 
 watch(() => props.placeCandidates, () => syncMarkers(true), { deep: true })
-watch(() => props.listings, () => syncMarkers(true), { deep: true })
+watch(() => props.listings, () => {
+  activeClusterIds.value = []
+  syncMarkers(true)
+}, { deep: true })
 watch(() => props.selectedId, () => syncMarkers(false))
 watch(() => [props.selectedPlaceRef, props.confirmedPlaceRef], () => syncMarkers(false))
 watch(() => props.searchActive, () => syncMarkers(true))
@@ -404,6 +478,7 @@ onMounted(initializeMap)
 onBeforeUnmount(() => {
   disposed = true
   clearMarkers()
+  for (const event of ['zoomend', 'moveend', 'resize', 'rotateend']) mapInstance.value?.off(event, redrawMarkers)
   mapInstance.value?.destroy()
   mapInstance.value = null
   amapApi = null

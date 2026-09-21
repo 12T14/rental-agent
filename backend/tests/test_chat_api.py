@@ -624,6 +624,33 @@ class ChatApiTests(unittest.TestCase):
         self.assertEqual(state["location"]["status"], "resolved")
         self.assertEqual(state["location"]["candidates"][0]["candidate_ref"], "pc_test")
 
+    def test_replying_with_natural_language_binds_the_saved_target(self) -> None:
+        client, fake_agent = make_client()
+        first = client.post(
+            "/api/v1/sessions/location-natural/chat/stream",
+            json={
+                "message": "帮我找示例学院附近的房子",
+                "client_request_id": "location-natural-1",
+            },
+        )
+        second = client.post(
+            "/api/v1/sessions/location-natural/chat/stream",
+            json={
+                "message": "就是示例学院那个",
+                "client_request_id": "location-natural-2",
+            },
+        )
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(second.status_code, 200)
+        self.assertIn('"status":"resolved"', second.text)
+        self.assertEqual(len(fake_agent.calls), 2)
+        submitted = fake_agent.calls[1]["messages"][-1]["content"]
+        self.assertIn("应用提供的已确认找房上下文", submitted)
+        self.assertIn('"candidate_ref":"pc_test"', submitted)
+        state = client.get("/api/v1/sessions/location-natural").json()
+        self.assertEqual(state["location"]["status"], "resolved")
+
     def test_session_history_is_retained_and_duplicate_request_is_replayed(self) -> None:
         client, fake_agent = make_client()
         first = client.post(

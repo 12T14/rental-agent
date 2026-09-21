@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from threading import RLock
 from typing import Any
-from urllib.parse import urlparse, urlunparse
+from urllib.parse import urljoin, urlparse, urlunparse
 
 import requests
 from bs4 import BeautifulSoup
@@ -32,6 +32,7 @@ FIXTURE_PATH = AGENT_CORE_ROOT / "fixtures" / "details.json"
 ARTIFACT_DIR = PROJECT_ROOT / "artifacts"
 
 REQUEST_TIMEOUT = 20
+MAX_REDIRECTS = 3
 MAX_URLS = 20
 DEFAULT_DELAY_SECONDS = 3.0
 DETAIL_VERIFICATION_TTL_SECONDS = 300
@@ -284,6 +285,13 @@ def _artifact_path() -> Path:
     return ARTIFACT_DIR / f"detail_batch_{stamp}.json"
 
 
+def _new_browser_context(browser, session_file: Path):
+    return browser.new_context(
+        storage_state=str(session_file), locale="zh-CN",
+        viewport={"width": 1440, "height": 900},
+    )
+
+
 def _open_browser_session(session_file: Path):
     """使用此前验证过的会话状态打开一个无头 Playwright 上下文。"""
     sys.path.insert(0, str(SKILL_ROOT))
@@ -291,13 +299,71 @@ def _open_browser_session(session_file: Path):
     from scrape_58 import _launch_browser
 
     playwright = sync_playwright().start()
-    browser = _launch_browser(playwright, headless=True)
-    context = browser.new_context(
-        storage_state=str(session_file),
-        locale="zh-CN",
-        viewport={"width": 1440, "height": 900},
-    )
-    return playwright, browser, context
+    browser = None
+    try:
+        browser = _launch_browser(playwright, headless=True)
+        return playwright, browser, _new_browser_context(browser, session_file)
+    except Exception:
+        if browser is not None:
+            try:
+                browser.close()
+            except Exception:
+                pass
+        try:
+            playwright.stop()
+        except Exception:
+            pass
+        raise
+
+
+def _safe_detail_redirect(original: str, target: str) -> bool:
+    """Only HTTPS, same platform/city and the original listing path may be followed."""
+    sys.path.insert(0, str(SKILL_ROOT))
+    from platform_pages import platform_city
+
+    parsed = urlparse(target)
+    source = urlparse(original)
+    try:
+        return (
+            parsed.scheme == "https" and not parsed.username and not parsed.password
+            and parsed.port in (None, 443)
+            and _platform_for_host(parsed.hostname or "") == _platform_for_host(source.hostname or "")
+            and _host_allowed(target) and not _is_probable_list_page(target)
+            and parsed.path.rstrip("/") == source.path.rstrip("/")
+            and (
+                platform_city(target) == platform_city(original)
+                if platform_city(original) else parsed.hostname == source.hostname
+            )
+        )
+    except ValueError:
+        return False
+
+
+def _read_http_detail(url: str) -> tuple[Any, dict[str, Any] | None]:
+    """Preserve signed query parameters while validating every redirect hop."""
+    current = url
+    seen = {current}
+    with requests.Session() as session:
+        for hop in range(MAX_REDIRECTS + 1):
+            response = session.get(
+                current, headers={"User-Agent": "RentalResearchAgent/0.1 (public-detail-reader)"},
+                timeout=REQUEST_TIMEOUT, allow_redirects=False,
+            )
+            if not 300 <= response.status_code < 400:
+                return response, None
+            location = response.headers.get("Location", "")
+            target = urljoin(current, location)
+            if not location or not _safe_detail_redirect(url, target):
+                # Official challenge pages may live on a non-city subdomain.
+                if _host_allowed(target) and _is_challenge_url(target):
+                    return response, {"url": url, "status": "blocked", "message": "平台要求人工验证，未跟随验证跳转。"}
+                return response, {"url": url, "status": "rejected_redirect", "message": "跳转不满足 HTTPS、同平台、同城市及原房源路径约束，已停止。"}
+            if _is_challenge_url(target):
+                return response, {"url": url, "status": "blocked", "message": "平台要求人工验证，未跟随验证跳转。"}
+            if target in seen or hop == MAX_REDIRECTS:
+                return response, {"url": url, "status": "redirect_not_followed", "message": "跳转循环或超过三次跳转，已停止。"}
+            seen.add(target)
+            current = target
 
 
 def _platform_for_host(host: str) -> str | None:
@@ -311,16 +377,42 @@ def _platform_for_host(host: str) -> str | None:
     return None
 
 
-def _record_detail_verification_request(platform: str, target_url: str) -> dict[str, Any]:
+def _record_detail_verification_request(
+    platform: str,
+    target_url: str,
+    continuation_urls: list[str] | tuple[str, ...] = (),
+) -> dict[str, Any]:
     request = {
         "platform": platform,
         "target_url": canonical_url(target_url),
         "recorded_at": time.monotonic(),
         "consumed": False,
+        "continuation_urls": [
+            canonical_url(url)
+            for url in continuation_urls
+            if canonical_url(url) and canonical_url(url) != canonical_url(target_url)
+        ][:MAX_URLS],
     }
     with _DETAIL_VERIFICATION_LOCK:
         _DETAIL_VERIFICATION_REQUESTS[platform] = request
     return dict(request)
+
+
+def detail_verification_context(platform: str, target_url: str) -> dict[str, Any] | None:
+    """Return bounded post-verification URLs without exposing browser state."""
+
+    normalized_url = canonical_url(target_url)
+    with _DETAIL_VERIFICATION_LOCK:
+        request = _DETAIL_VERIFICATION_REQUESTS.get(platform)
+        if not request:
+            return None
+        fresh = time.monotonic() - float(request.get("recorded_at", 0.0)) <= DETAIL_VERIFICATION_TTL_SECONDS
+        if not fresh or request.get("target_url") != normalized_url:
+            return None
+        return {
+            "retry_urls": [request["target_url"]],
+            "continuation_urls": list(request.get("continuation_urls") or []),
+        }
 
 
 def consume_detail_verification_request(platform: str, target_url: str) -> bool:
@@ -384,6 +476,24 @@ def fetch_detail_batch(
             continue
         normalized.append(url)
 
+    # Spread a bounded detail batch across platforms before applying the
+    # global limit, so the first platform in the model's list cannot consume
+    # every detail slot.
+    platform_order: list[str] = []
+    grouped_urls: dict[str, list[str]] = {}
+    for url in normalized:
+        platform = _platform_for_host(urlparse(url).hostname or "") or "other"
+        if platform not in grouped_urls:
+            grouped_urls[platform] = []
+            platform_order.append(platform)
+        grouped_urls[platform].append(url)
+    balanced: list[str] = []
+    while any(grouped_urls[key] for key in platform_order):
+        for platform in platform_order:
+            if grouped_urls[platform]:
+                balanced.append(grouped_urls[platform].pop(0))
+    normalized = balanced
+
     limit = max(1, min(int(max_urls), MAX_URLS))
     omitted_count = max(0, len(normalized) - limit)
     normalized = normalized[:limit]
@@ -392,6 +502,7 @@ def fetch_detail_batch(
     results: list[dict[str, Any]] = list(invalid)
     blocked_platforms: set[str] = set()
     first_blocked_url: dict[str, str] = {}
+    skipped_urls_by_platform: dict[str, list[str]] = defaultdict(list)
     attempted_count = 0
     session_files = {
         "58": Path(os.getenv("RENTAL_58_SESSION_FILE", str(DEFAULT_58_SESSION))).expanduser(),
@@ -399,13 +510,20 @@ def fetch_detail_batch(
         "fang": Path(os.getenv("RENTAL_FANG_SESSION_FILE", str(DEFAULT_FANG_SESSION))).expanduser(),
     }
     browser_parts: dict[str, tuple[Any, Any, Any]] = {}
+    browser_owner = None
     browser_session_used = False
     if live:
         for platform, session_path in session_files.items():
             if not session_path.exists() or not any(_platform_for_host(urlparse(url).hostname or "") == platform for url in normalized):
                 continue
             try:
-                browser_parts[platform] = _open_browser_session(session_path)
+                if browser_owner is None:
+                    browser_owner = _open_browser_session(session_path)
+                    browser_parts[platform] = browser_owner
+                else:
+                    # One Playwright event loop per batch, isolated storage per platform.
+                    context = _new_browser_context(browser_owner[1], session_path)
+                    browser_parts[platform] = (*browser_owner[:2], context)
                 browser_session_used = True
                 print(f"[详情] {platform} 使用已验证浏览器会话串行访问。", file=sys.stderr)
             except Exception as exc:
@@ -420,6 +538,8 @@ def fetch_detail_batch(
                 "status": "skipped_after_block",
                 "message": f"{PLATFORM_NAMES.get(platform, '该平台')} 已触发验证，本批次未继续访问。",
             })
+            if platform:
+                skipped_urls_by_platform[platform].append(url)
             continue
         attempted_count += 1
         try:
@@ -430,12 +550,14 @@ def fetch_detail_batch(
                 browser_context = browser_parts.get(platform, (None, None, None))[2] if platform else None
                 if browser_context is not None:
                     page = browser_context.new_page()
-                    response = page.goto(url, wait_until="domcontentloaded", timeout=30_000)
-                    page.wait_for_timeout(2_000)
-                    status_code = response.status if response is not None else 200
-                    html = page.content()
-                    final_url = page.url
-                    page.close()
+                    try:
+                        response = page.goto(url, wait_until="domcontentloaded", timeout=30_000)
+                        page.wait_for_timeout(2_000)
+                        status_code = response.status if response is not None else 200
+                        html = page.content()
+                        final_url = page.url
+                    finally:
+                        page.close()
                     last_request[host] = time.monotonic()
                     if status_code in (401, 403, 429):
                         results.append({"url": url, "status": "blocked", "message": f"浏览器页面 HTTP {status_code}，未重试。"})
@@ -443,8 +565,10 @@ def fetch_detail_batch(
                             blocked_platforms.add(platform)
                             first_blocked_url.setdefault(platform, url)
                         continue
-                    if not _host_allowed(final_url):
-                        results.append({"url": url, "status": "rejected_redirect", "message": "页面重定向到了不在允许列表中的域名，未继续解析。"})
+                    if not _safe_detail_redirect(url, final_url) and not (
+                        _host_allowed(final_url) and _is_challenge_url(final_url)
+                    ):
+                        results.append({"url": url, "status": "rejected_redirect", "message": "最终页面不满足同平台、同城市及原房源路径约束，未继续解析。"})
                         continue
                     detail_result = _detail_result_for_requested_url(html, url, final_url)
                     results.append(detail_result)
@@ -452,31 +576,14 @@ def fetch_detail_batch(
                         blocked_platforms.add(platform)
                         first_blocked_url.setdefault(platform, url)
                     continue
-                response = requests.get(
-                    url,
-                    headers={"User-Agent": "RentalResearchAgent/0.1 (public-detail-reader)"},
-                    timeout=REQUEST_TIMEOUT,
-                    allow_redirects=False,
-                )
+                response, redirect_result = _read_http_detail(url)
                 last_request[host] = time.monotonic()
                 response.encoding = response.apparent_encoding or "utf-8"
-                if 300 <= response.status_code < 400:
-                    location = response.headers.get("Location", "")
-                    if _is_challenge_url(location):
-                        results.append({
-                            "url": url,
-                            "status": "blocked",
-                            "message": "详情页重定向到平台官方验证页面，未自动跟随。",
-                        })
-                        if platform:
-                            blocked_platforms.add(platform)
-                            first_blocked_url.setdefault(platform, url)
-                    else:
-                        results.append({
-                            "url": url,
-                            "status": "redirect_not_followed",
-                            "message": "详情页返回重定向；为避免访问未校验域名，当前工具不自动跟随。",
-                        })
+                if redirect_result is not None:
+                    results.append(redirect_result)
+                    if redirect_result["status"] == "blocked" and platform:
+                        blocked_platforms.add(platform)
+                        first_blocked_url.setdefault(platform, url)
                     continue
                 if response.status_code in (401, 403, 429):
                     results.append({"url": url, "status": "blocked", "message": f"HTTP {response.status_code}，未重试。"})
@@ -512,8 +619,16 @@ def fetch_detail_batch(
 
     for parts in browser_parts.values():
         try:
-            parts[1].close()
-            parts[0].stop()
+            parts[2].close()
+        except Exception:
+            pass
+    if browser_owner is not None:
+        try:
+            browser_owner[1].close()
+        except Exception:
+            pass
+        try:
+            browser_owner[0].stop()
         except Exception:
             pass
 
@@ -534,12 +649,15 @@ def fetch_detail_batch(
     verification_requests = []
     if live:
         for platform, target_url in first_blocked_url.items():
-            request = _record_detail_verification_request(platform, target_url)
+            request = _record_detail_verification_request(
+                platform, target_url, skipped_urls_by_platform.get(platform, [])
+            )
             verification_requests.append({
                 "platform": PLATFORM_NAMES[platform],
                 "target_url": request["target_url"],
-                # 验证后只重试触发验证的这一条，避免立即再次打满整批。
+                # 先重试触发验证的这一条；成功后再继续一次受控队列。
                 "retry_urls": [request["target_url"]],
+                "continuation_urls": request["continuation_urls"],
                 "reason": "detail_access_blocked",
             })
 
@@ -583,12 +701,12 @@ def fetch_detail_batch(
 @tool
 def batch_fetch_listing_details(
     urls: list[str],
-    max_urls: int = 10,
+    max_urls: int = MAX_URLS,
 ) -> str:
     """一次性读取允许的房源详情 URL，并返回精简事实。
 
-    一次调用应传入筛选后的 URL 列表。工具会去重并串行访问；一个平台首次遇到访问控制后，
-    本批次不再访问该平台的剩余 URL，并只为首个被拦详情生成一次短时人工验证授权。
+    一次调用应传入筛选后的 URL 列表。工具会按平台轮转后去重并串行访问；一个平台首次遇到
+    访问控制后，本批次不再访问该平台的剩余 URL，并为首个被拦详情生成一次短时人工验证授权。
     工具不会自行重试或绕过验证。只有控制台设置
     ``RENTAL_DEMO_MODE=live`` 时才启用联网访问。应传入候选搜索工具返回的详情 URL；
     平台列表页地址不属于详情结果。

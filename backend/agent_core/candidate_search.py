@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import re
 import sys
@@ -131,6 +132,25 @@ def _compact(item: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _number_candidates(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Assign identity/number before the model or map can reorder this search."""
+    result = []
+    seen = set()
+    for item in items:
+        item = dict(item)
+        identity = item.get("detail_url") or (
+            f"{item.get('platform')}:{item.get('listing_id')}:{item.get('title')}:{item.get('address')}"
+        )
+        identity = str(identity).split("?", 1)[0]
+        if identity in seen:
+            continue
+        seen.add(identity)
+        item["listing_id"] = f"listing-{hashlib.sha256(identity.encode()).hexdigest()[:16]}"
+        item["display_number"] = len(result) + 1
+        result.append(item)
+    return result
+
+
 def _city_code(city: str) -> str:
     value = (city or "").strip().lower()
     return CITY_ALIASES.get(value, CITY_ALIASES.get(value.removesuffix("市"), value))
@@ -229,11 +249,14 @@ def search_rental_candidates(
                 item for item in items
                 if token in f"{item.get('title', '')} {item.get('community', '')}"
             ] or items
+        compact = _number_candidates([
+            _compact(item) | _location_evidence(item, keyword) for item in items[:max_results]
+        ])
         return json.dumps({
             "mode": "offline_fixture",
             "status": "ok",
-            "listing_count": min(len(items), max_results),
-            "listings": [(_compact(item) | _location_evidence(item, keyword)) for item in items[:max_results]],
+            "listing_count": len(compact),
+            "listings": compact,
             "detail_urls": [
                 item["listing_url"] for item in (_compact(raw) for raw in items[:max_results])
                 if item.get("url_type") == "detail" and item.get("listing_url")
@@ -271,7 +294,7 @@ def search_rental_candidates(
             rejected_by_platform[platform_name] = rejected_by_platform.get(platform_name, 0) + 1
             continue
         listings.append(item)
-    compact = [(_compact(item) | _location_evidence(item, keyword)) for item in listings[:max_results]]
+    compact = _number_candidates([(_compact(item) | _location_evidence(item, keyword)) for item in listings[:max_results]])
     blocked_hints = result.get("blocked_hints", []) if isinstance(result, dict) else []
     platform_status = dict(result.get("platforms", {})) if isinstance(result, dict) else {}
     platform_diagnostics = result.get("platform_diagnostics", {}) if isinstance(result, dict) else {}

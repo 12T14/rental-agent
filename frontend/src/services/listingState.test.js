@@ -12,11 +12,44 @@ import {
   listingHasAddress,
   listingLocationNotice,
   listingPlaceLabel,
+  listingNumberLabel,
+  recommendationLabel,
   locationStatusLabel,
   normalizeListings,
   normalizePlatformStatuses,
   visibleListings
 } from './listingState.js'
+
+test('numbers and explicit recommendations survive enrichment, sorting and history', () => {
+  const initial = normalizeListings({ listings: [
+    { id: 'a', title: 'A', detailUrl: 'https://nj.58.com/zufang/a.shtml', displayNumber: 8, filterStatus: 'passed', detailStatus: 'ok', recommendation: { reason: '预算内', caveat: '水电待核验' } },
+    { id: 'b', title: 'B', displayNumber: 17 },
+    { id: 'c', title: 'C', displayNumber: 25 }
+  ] })
+  const enriched = applyListingEnrichment(initial, { listings: [
+    { id: 'c', lng: 119.9, lat: 31.6 }, { id: 'a', detailStatus: 'ok' }, { id: 'b' }
+  ] })
+  assert.deepEqual(enriched.map(item => item.displayNumber), [25, 8, 17])
+  assert.equal(listingNumberLabel(enriched[1]), '#8')
+  assert.equal(recommendationLabel(enriched[1]), 'Agent 推荐')
+  const restored = normalizeListings(JSON.parse(JSON.stringify({ listings: enriched })))
+  assert.deepEqual(restored.map(item => item.displayNumber), [25, 8, 17])
+  assert.equal(restored.filter(item => item.recommendation).length, 1)
+  assert.equal(normalizeListings({ listings: [{ id: 'a', recommendation: null }] }, initial)[0].recommendation, null)
+  assert.equal(normalizeListings({ listings: [{ id: 'a', filterStatus: 'excluded' }] }, initial)[0].recommendation, null)
+})
+
+test('legacy numbers stay stable and a detail result never creates a recommendation', () => {
+  const initial = normalizeListings({ listings: [
+    { id: 'a', detailUrl: 'https://nj.58.com/zufang/a.shtml' }, { id: 'b' }
+  ] })
+  const sorted = normalizeListings({ listings: [{ id: 'b' }, { id: 'a' }] }, initial)
+  assert.deepEqual(sorted.map(item => item.displayNumber), [2, 1])
+  const detailed = applyDetailResults(sorted, { details: [{ url: initial[0].detailUrl, status: 'ok' }] })
+  assert.equal(detailed[1].recommendation, null)
+  const fresh = normalizeListings({ listings: [{ id: 'b' }, { id: 'a' }] })
+  assert.deepEqual(fresh.map(item => item.displayNumber), [1, 2])
+})
 
 test('normalizes safe listing and platform events into the UI shape', () => {
   const platforms = normalizePlatformStatuses({

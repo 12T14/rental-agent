@@ -108,7 +108,8 @@ const listingEventStream = [
   'event: platform_status\ndata: {"platforms":[{"key":"58","name":"58同城","status":"ok","label":"已获取","count":1}],"status":"completed","offline":true}\n\n',
   'event: listings\ndata: {"listings":[{"id":"l1","platformKey":"58","platform":"58同城","title":"列表标题","community":"示例小区","rent":1000,"room":"一室","area":45,"detailUrl":"https://example.58.com/zufang/l1.html","urlType":"detail","offline":true}],"status":"completed","offline":true}\n\n',
   'event: listing_details\ndata: {"details":[{"url":"https://example.58.com/zufang/l1.html","status":"ok","title":"详情标题","facts":{"monthly_rent_cny":1050,"payment_rule":"押一付一"}}],"status":"completed","offline":true}\n\n',
-  'event: listing_update\ndata: {"listings":[{"id":"l1","platformKey":"58","platform":"58同城","title":"详情标题","community":"示例小区","rent":1050,"room":"一室","area":45,"detailUrl":"https://example.58.com/zufang/l1.html","urlType":"detail","detailFacts":{"monthly_rent_cny":1050,"payment_rule":"押一付一"},"detailStatus":"ok","offline":true}],"status":"completed","offline":true}\n\n'
+  'event: listing_update\ndata: {"listings":[{"id":"l1","platformKey":"58","platform":"58同城","title":"详情标题","community":"示例小区","rent":1050,"room":"一室","area":45,"detailUrl":"https://example.58.com/zufang/l1.html","urlType":"detail","detailFacts":{"monthly_rent_cny":1050,"payment_rule":"押一付一"},"detailStatus":"ok","offline":true}],"status":"completed","offline":true}\n\n',
+  'event: listing_recommendations\ndata: {"listings":[{"id":"l1","displayNumber":8,"recommendation":{"reason":"预算内","caveat":"水电待核验"}}],"recommendation_count":1}\n\n'
 ].join('') + 'event: assistant\ndata: {"text":"已整理"}\n\nevent: done\ndata: {"status":"completed"}\n\n'
 
 test('App renders structured listing events and restores them from session history', async () => {
@@ -119,7 +120,7 @@ test('App renders structured listing events and restores them from session histo
     if (url.endsWith('/chat/stream')) {
       saved = snapshot('s-listings', {
         messages: [{ id: 'assistant', role: 'assistant', text: '已整理' }],
-        listings: [{ id: 'l1', platformKey: '58', platform: '58同城', title: '详情标题', community: '示例小区', rent: 1050, room: '一室', area: 45, detailUrl: 'https://example.58.com/zufang/l1.html', urlType: 'detail', detailFacts: { monthly_rent_cny: 1050, payment_rule: '押一付一' }, detailStatus: 'ok', offline: true }],
+        listings: [{ id: 'l1', displayNumber: 8, recommendation: { reason: '预算内', caveat: '水电待核验' }, platformKey: '58', platform: '58同城', title: '详情标题', community: '示例小区', rent: 1050, room: '一室', area: 45, detailUrl: 'https://example.58.com/zufang/l1.html', urlType: 'detail', detailFacts: { monthly_rent_cny: 1050, payment_rule: '押一付一' }, detailStatus: 'ok', offline: true }],
         platforms: [{ key: '58', name: '58同城', status: 'ok', label: '已获取', count: 1 }],
         search: { status: 'completed', detail_status: 'completed', offline: true }
       })
@@ -141,6 +142,8 @@ test('App renders structured listing events and restores them from session histo
 
     await mounted.state.refreshCurrentSession()
     assert.equal(mounted.state.listings[0].title, '详情标题')
+    assert.equal(mounted.state.listings[0].displayNumber, 8)
+    assert.equal(mounted.state.listings[0].recommendation.reason, '预算内')
     assert.match(mounted.state.messages.at(-1).text, /^已整理/)
     assert.equal(mounted.state.messages.some(message => message.kind === 'result'), false)
     assert.equal(mounted.state.searchSummary.offline, true)
@@ -183,7 +186,7 @@ test('App picks up a model-generated title after the terminal chat response', as
   }
 })
 
-test('App reveals eligible listings twenty at a time', async () => {
+test('App paginates only the list and keeps all candidates including excluded ones on the map', async () => {
   const originalFetch = globalThis.fetch
   const candidates = Array.from({ length: 46 }, (_, index) => ({
     id: `listing-${index + 1}`,
@@ -207,18 +210,20 @@ test('App reveals eligible listings twenty at a time', async () => {
   try {
     mounted = mount()
     await settleUntil(() => !mounted.state.historyLoading && mounted.state.activeHistory === 's-pagination')
-    assert.equal(mounted.state.eligibleListings.length, 45)
+    assert.equal(mounted.state.allCandidateListings.length, 46)
+    assert.equal(mounted.state.allCandidateListings.at(-1).filterStatus, 'excluded')
     assert.equal(mounted.state.displayListings.length, 20)
-    assert.equal(mounted.state.remainingListingCount, 25)
+    assert.equal(mounted.state.remainingListingCount, 26)
 
     mounted.state.loadMoreListings()
     await nextTick()
     assert.equal(mounted.state.displayListings.length, 40)
-    assert.equal(mounted.state.remainingListingCount, 5)
+    assert.equal(mounted.state.remainingListingCount, 6)
+    assert.equal(mounted.state.allCandidateListings.length, 46)
 
     mounted.state.loadMoreListings()
     await nextTick()
-    assert.equal(mounted.state.displayListings.length, 45)
+    assert.equal(mounted.state.displayListings.length, 46)
     assert.equal(mounted.state.remainingListingCount, 0)
   } finally {
     mounted?.app.unmount()

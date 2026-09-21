@@ -144,7 +144,7 @@ class CheckpointRuntimeTests(unittest.IsolatedAsyncioTestCase):
         runtime = make_runtime(calls, pause=False)
         original = runtime._stream_graph
 
-        async def fail_before_input(*args):
+        async def fail_before_input(*args, **kwargs):
             raise TimeoutError("before graph starts")
             yield
 
@@ -310,6 +310,66 @@ class CheckpointRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(safe["candidates"][0]["formatted_address"]), 500)
         self.assertNotIn("lng", safe["candidates"][0])
         self.assertNotIn("lat", safe["candidates"][0])
+
+    async def test_location_selection_accepts_natural_language_and_agent_letter_labels(self):
+        from app.agent_runtime import _candidate_for_location_selection
+
+        location = {
+            "status": "needs_confirmation",
+            "candidates": [
+                {
+                    "candidate_ref": "night-market",
+                    "name": "常州大学城夜市",
+                    "formatted_address": "常州市武进区凤栖路",
+                },
+                {
+                    "candidate_ref": "science-city",
+                    "name": "常州大学科教城校区",
+                    "formatted_address": "常州市武进区湖塘镇滆湖中路21号",
+                },
+            ],
+        }
+
+        natural = _candidate_for_location_selection(
+            location,
+            "就是科教城校区那个",
+        )
+        letter = _candidate_for_location_selection(
+            location,
+            "A",
+            [{
+                "role": "assistant",
+                "content": (
+                    "请确认：\n"
+                    "**A. 常州大学科教城校区**（武进区湖塘镇滆湖中路21号）\n"
+                    "**B. 常州大学城夜市**（武进区凤栖路）"
+                ),
+            }],
+        )
+
+        self.assertEqual(natural["candidate_ref"], "science-city")
+        self.assertEqual(letter["candidate_ref"], "science-city")
+
+    async def test_location_confirmation_rejects_references_outside_current_candidates(self):
+        from app.agent_runtime import _resolve_location_confirmation
+
+        location = {
+            "status": "needs_confirmation",
+            "candidates": [{
+                "candidate_ref": "science-city",
+                "name": "常州大学科教城校区",
+                "formatted_address": "常州市武进区湖塘镇滆湖中路21号",
+                "lng": 120.0,
+                "lat": 31.7,
+            }],
+        }
+
+        resolved = _resolve_location_confirmation(location, "science-city")
+        rejected = _resolve_location_confirmation(location, "model-invented")
+
+        self.assertEqual(resolved["status"], "resolved")
+        self.assertEqual(resolved["candidates"][0]["candidate_ref"], "science-city")
+        self.assertIsNone(rejected)
 
 
 class CheckpointApiTests(unittest.TestCase):
