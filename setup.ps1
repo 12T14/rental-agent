@@ -131,12 +131,14 @@ Ensure-PrivateTemplate (Join-Path $projectRoot 'frontend\.env.example') (Join-Pa
 Write-Host ''
 Write-Host 'Setup complete. New configuration files use these defaults:' -ForegroundColor Green
 Write-Host '  CHECKPOINT_BACKEND=memory'
-Write-Host '  RENTAL_DEMO_MODE=offline'
+Write-Host '  RENTAL_DEMO_MODE=live'
 Write-Host ''
 Write-Host 'Existing configuration values are never changed.'
+Write-Host 'Upgrading an older setup? Check backend\.env: change RENTAL_DEMO_MODE=offline to live for real searches.'
 Write-Host 'AI chat requires MAIN_MODEL_API_KEY in backend\.env, including offline fixture mode.'
 Write-Host 'Location lookup requires AMAP_WEB_SERVICE_KEY in backend\.env.'
 Write-Host 'The interactive map uses frontend\.env.local. All keys stay in private files.'
-Write-Host 'Real platform searches require RENTAL_DEMO_MODE=live and acceptance of the platform terms.'
+Write-Host 'Real platform searches are the default; confirm the platform terms before use.'
+Write-Host 'Only explicit RENTAL_DEMO_MODE=offline uses test fixtures. Live failures do not fall back to fixtures.'
 Write-Host 'For persistence, install -WithMongo and configure a separately managed MongoDB service.'
 Write-Host 'Next: run start.bat or .\start.ps1' -ForegroundColor Cyan

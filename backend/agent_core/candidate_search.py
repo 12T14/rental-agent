@@ -1,7 +1,7 @@
 """搜索已配置 rental-scraper 技能的租房 Agent 工具。
 
-调用方通过 RENTAL_DEMO_MODE 明确选择数据源。
-真实控制台使用 live；offline 仅用于冒烟测试，绝不把夹具记录伪装成实时房源。
+默认使用真实搜索；显式设置 RENTAL_DEMO_MODE=offline 才使用测试夹具。
+联网失败不会回退到夹具，绝不把夹具记录伪装成实时房源。
 """
 
 from __future__ import annotations
@@ -17,6 +17,8 @@ from typing import Any
 from urllib.parse import urlparse
 
 from langchain_core.tools import tool
+
+from .runtime_mode import rental_mode
 
 AGENT_CORE_ROOT = Path(__file__).resolve().parent
 PROJECT_ROOT = AGENT_CORE_ROOT.parent
@@ -218,8 +220,7 @@ def search_rental_candidates(
     如果平台只提供列表页，则将 ``url_type`` 设为 ``source_list``，避免 Agent 把它当成详情页。
     """
     max_results = max(1, min(int(max_results), 60))
-    mode = os.getenv("RENTAL_DEMO_MODE", "offline").strip().lower()
-    live = mode == "live"
+    live = rental_mode() == "live"
     # 不要从机构名称推断实际城市。学校或公司名称中的城市前缀，
     # 可能并不是实体所在位置。
     city = _city_code(city)

@@ -18,6 +18,8 @@ from typing import Any, Protocol
 import requests
 from langchain_core.tools import tool
 
+from .runtime_mode import rental_mode
+
 
 AGENT_CORE_ROOT = Path(__file__).resolve().parent
 FIXTURE_PATH = AGENT_CORE_ROOT / "fixtures" / "places.json"
@@ -553,8 +555,8 @@ def _base_result(
     status: str,
     message: str,
     candidates: list[PlaceCandidate] | None = None,
-    mode: str = "offline_fixture",
-    provider: str = "fake",
+    mode: str = "not_requested",
+    provider: str = "none",
     city_hint: str = "",
 ) -> dict[str, Any]:
     return {
@@ -576,8 +578,7 @@ def _provider_for_current_mode() -> ProviderSelection:
 
     provider_name = os.getenv("MAP_PROVIDER", "").strip().lower()
     if not provider_name:
-        rental_mode = os.getenv("RENTAL_DEMO_MODE", "offline").strip().lower()
-        provider_name = "amap" if rental_mode == "live" else "fake"
+        provider_name = "amap" if rental_mode() == "live" else "fake"
 
     if provider_name in {"fake", "fixture", "offline"}:
         return ProviderSelection(FakePlaceProvider(), "fake", "offline_fixture")

@@ -15,6 +15,8 @@ from pathlib import Path
 
 from langchain_core.tools import tool
 
+from .runtime_mode import rental_mode
+
 AGENT_CORE_ROOT = Path(__file__).resolve().parent
 PROJECT_ROOT = AGENT_CORE_ROOT.parent
 SKILL_ROOT = PROJECT_ROOT / "skills" / "rental-scraper"
@@ -134,7 +136,7 @@ def human_verify_rental_platform(
     只接受详情批次产生且与首个被拦原始 URL 完全匹配的授权。两种授权都短时、
     单次消费；工具只打开平台官方验证页，不破解或绕过验证。
     """
-    if os.getenv("RENTAL_DEMO_MODE", "offline").strip().lower() != "live":
+    if rental_mode() != "live":
         return json.dumps({
             "status": "unsupported",
             "message": "人工验证工具只在 --live 真实联网模式启用；离线模式不会打开浏览器。",

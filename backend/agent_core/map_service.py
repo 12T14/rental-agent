@@ -22,6 +22,8 @@ from urllib.parse import urlparse
 
 import requests
 
+from .runtime_mode import rental_mode
+
 
 MAP_POINTS_FIXTURE = Path(__file__).resolve().parent / "fixtures" / "map_points.json"
 GEOCODE_URL = "https://restapi.amap.com/v3/geocode/geo"
@@ -604,7 +606,7 @@ class AmapMapProvider:
 def _provider_from_environment() -> tuple[MapProvider | None, str]:
     provider_name = os.getenv("MAP_PROVIDER", "").strip().lower()
     if not provider_name:
-        provider_name = "fake" if os.getenv("RENTAL_DEMO_MODE", "offline").strip().lower() != "live" else "amap"
+        provider_name = "amap" if rental_mode() == "live" else "fake"
     if provider_name in {"fake", "offline", "fixture"}:
         return FakeMapProvider(), "fake"
     if provider_name == "amap":

@@ -22,9 +22,11 @@ from langgraph.types import Command
 try:  # 兼容 ``backend.app`` 和现有测试使用的顶层 ``app`` 导入方式。
     from ..agent_core.map_service import MapEnrichmentResult, MapService
     from ..agent_core.ranking import SearchCriteria, rank_listings, update_search_criteria
+    from ..agent_core.runtime_mode import DEFAULT_RENTAL_MODE, rental_mode
 except ImportError:  # pragma: no cover - 仅在 backend 目录作为 sys.path 根时使用。
     from agent_core.map_service import MapEnrichmentResult, MapService
     from agent_core.ranking import SearchCriteria, rank_listings, update_search_criteria
+    from agent_core.runtime_mode import DEFAULT_RENTAL_MODE, rental_mode
 from .checkpoint_store import CheckpointStore
 from .preference_tool import FIELD_LABELS
 from .session_title import fallback_session_title, normalize_session_title
@@ -75,13 +77,13 @@ def build_rental_agent(checkpointer) -> AgentLike:
 
 
 def _configure_runtime_environment(env_path=None) -> None:
-    """先加载后端私有配置，再为未配置的运行模式应用安全默认值。"""
+    """先加载私有配置，再应用真实搜索默认值；不覆盖显式离线设置。"""
 
     from ..agent_core.config import PROJECT_ROOT, load_simple_env
 
     load_simple_env(env_path or PROJECT_ROOT / ".env")
-    os.environ.setdefault("RENTAL_DEMO_MODE", "offline")
-    os.environ.setdefault("MAP_PROVIDER", "amap")
+    os.environ.setdefault("RENTAL_DEMO_MODE", DEFAULT_RENTAL_MODE)
+    os.environ.setdefault("MAP_PROVIDER", "amap" if rental_mode() == "live" else "fake")
 
 
 def _message_value(message: Any, key: str, default: Any = None) -> Any:

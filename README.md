@@ -87,6 +87,8 @@ start.bat / start.ps1      启动后端、前端并打开浏览器
 - 安装 Playwright Chromium；
 - 创建 `backend/.env` 和 `frontend/.env.local`（已有配置不会覆盖）。
 
+首次安装默认使用真实房源搜索（`RENTAL_DEMO_MODE=live`）和内存存储（`CHECKPOINT_BACKEND=memory`），无需安装 MongoDB。“本地模式”表示程序运行在本机，不表示房源数据来自离线夹具。
+
 如果 Python 和 Node.js 已经安装，也可以运行：
 
 ```powershell
@@ -135,7 +137,9 @@ VITE_AMAP_SECURITY_CODE=你的高德安全密钥
 VITE_USE_BACKEND_CHAT=true
 ```
 
-`RENTAL_DEMO_MODE=offline` 使用项目内的离线夹具，适合无网络回归测试；`live` 才会访问真实公开平台。离线房源数据不等于离线 AI，对话仍需要配置模型 API Key。
+默认及未填写 `RENTAL_DEMO_MODE` 时使用 `live`，访问真实公开平台；缺少配置、网络失败或平台拦截会报告对应状态，不会自动使用示例房源替代。只有显式设置 `RENTAL_DEMO_MODE=offline` 才使用项目内的离线夹具。完全离线测试还应设置 `MAP_PROVIDER=fake`；离线房源数据不等于离线 AI，对话仍需要配置模型 API Key。
+
+**从旧版本升级：** 安装脚本不会覆盖已有的 `backend/.env`。如果旧文件写着 `RENTAL_DEMO_MODE=offline`，请手动改为 `live`，地图使用 `MAP_PROVIDER=amap`，然后重启后端并新建会话重新搜索。旧会话中的夹具结果不会自动变成真实房源。
 
 ## MongoDB（可选）
 

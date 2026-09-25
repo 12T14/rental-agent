@@ -218,5 +218,6 @@ Write-Host 'Next steps:' -ForegroundColor Cyan
 Write-Host '  1. Fill in the model and map keys in backend\.env and frontend\.env.local.'
 Write-Host '  2. Keep CHECKPOINT_BACKEND=memory for the simplest first run.'
 Write-Host '  3. Run start.bat to launch the backend and frontend.'
+Write-Host 'New configuration uses live rental searches. Existing .env files are preserved; check RENTAL_DEMO_MODE when upgrading.'
 Write-Host ''
 Write-Host 'MongoDB is optional. It was not installed or started by this script.' -ForegroundColor DarkGray

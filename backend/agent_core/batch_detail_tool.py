@@ -22,6 +22,8 @@ import requests
 from bs4 import BeautifulSoup
 from langchain_core.tools import tool
 
+from .runtime_mode import rental_mode
+
 AGENT_CORE_ROOT = Path(__file__).resolve().parent
 PROJECT_ROOT = AGENT_CORE_ROOT.parent
 SKILL_ROOT = PROJECT_ROOT / "skills" / "rental-scraper"
@@ -451,11 +453,11 @@ def _detail_result_for_requested_url(html: str, requested_url: str, final_url: s
 def fetch_detail_batch(
     urls: list[str],
     *,
-    live: bool = False,
+    live: bool,
     max_urls: int = MAX_URLS,
     delay_seconds: float = DEFAULT_DELAY_SECONDS,
 ) -> dict[str, Any]:
-    """串行读取有界 URL 批次，并返回精简的结构化事实。"""
+    """串行读取有界 URL 批次；底层调用方必须明确指定是否联网。"""
     seen: set[str] = set()
     normalized: list[str] = []
     invalid: list[dict[str, Any]] = []
@@ -707,10 +709,10 @@ def batch_fetch_listing_details(
 
     一次调用应传入筛选后的 URL 列表。工具会按平台轮转后去重并串行访问；一个平台首次遇到
     访问控制后，本批次不再访问该平台的剩余 URL，并为首个被拦详情生成一次短时人工验证授权。
-    工具不会自行重试或绕过验证。只有控制台设置
-    ``RENTAL_DEMO_MODE=live`` 时才启用联网访问。应传入候选搜索工具返回的详情 URL；
+    工具不会自行重试或绕过验证。默认读取真实页面，只有显式设置
+    ``RENTAL_DEMO_MODE=offline`` 才使用夹具。应传入候选搜索工具返回的详情 URL；
     平台列表页地址不属于详情结果。
     """
-    live = __import__("os").environ.get("RENTAL_DEMO_MODE", "offline") == "live"
+    live = rental_mode() == "live"
     result = fetch_detail_batch(urls, live=live, max_urls=max_urls)
     return json.dumps(result, ensure_ascii=False)
